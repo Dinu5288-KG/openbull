@@ -36,8 +36,9 @@ class Leg(BaseModel):
 
     Batch mode legs (parent ``strategy_kind="batch"``):
       * ``segment="options"`` requires ``option_type`` and ``strike_mode``.
-      * ``strike_mode="atm"`` requires ``atm_offset``.
+      * ``strike_mode="atm"`` / ``"spot_based"`` / ``"future_based"`` requires ``atm_offset``.
       * ``strike_mode="strike"`` requires ``strike_value``.
+      * ``strike_mode="premium_*"`` requires ``premium_value``.
 
     Signal mode legs (parent ``strategy_kind="signal"``):
       * Each leg carries its own ``symbol`` + ``exchange``.
@@ -72,13 +73,17 @@ class Leg(BaseModel):
     position: Literal["B", "S"] = "B"
 
     option_type: Optional[Literal["CE", "PE"]] = None
-    strike_mode: Optional[Literal["atm", "strike"]] = None
+    strike_mode: Optional[Literal[
+        "atm", "spot_based", "future_based", "strike",
+        "premium_near", "premium_greater", "premium_lesser",
+    ]] = None
     atm_offset: Optional[str] = Field(
         None,
         pattern=r"^(ATM|ATM[+-]\d+|ITM\d+|OTM\d+)$",
         description="ATM, ATM+1, ATM-1, ITM2, OTM3, etc.",
     )
     strike_value: Optional[float] = Field(None, gt=0)
+    premium_value: Optional[float] = Field(None, gt=0)
 
     # --- Signal-mode fields (None for batch-mode legs) ---
     symbol: Optional[str] = Field(None, min_length=1, max_length=50)
@@ -101,10 +106,16 @@ class Leg(BaseModel):
                 raise ValueError("option_type required when segment='options'")
             if self.strike_mode is None:
                 raise ValueError("strike_mode required when segment='options'")
-            if self.strike_mode == "atm" and not self.atm_offset:
-                raise ValueError("atm_offset required when strike_mode='atm'")
+            if self.strike_mode in ("atm", "spot_based", "future_based") and not self.atm_offset:
+                raise ValueError(
+                    "atm_offset required when strike_mode is spot/future based"
+                )
             if self.strike_mode == "strike" and self.strike_value is None:
                 raise ValueError("strike_value required when strike_mode='strike'")
+            if self.strike_mode in (
+                "premium_near", "premium_greater", "premium_lesser",
+            ) and self.premium_value is None:
+                raise ValueError("premium_value required when strike_mode is premium based")
         else:
             # Non-options legs must not carry option-only fields.
             if self.option_type is not None:

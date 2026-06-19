@@ -28,11 +28,14 @@ from typing import Any, Optional
 
 from backend.services.market_data_service import get_expiry_dates
 from backend.services.option_symbol_service import (
+    _fetch_available_strikes,
     _format_strike,
+    _find_near_month_futures,
     _lookup_option_in_db,
     _option_exchange_for,
     get_option_symbol,
 )
+from backend.services.quotes_service import get_multi_quotes_with_auth, get_quotes_with_auth
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +169,61 @@ def resolve_atm(
     )
 
 
+def resolve_future_based(
+    *,
+    underlying: str,
+    underlying_exchange: str,
+    expiry_date: str,
+    atm_offset: str,
+    option_type: str,
+    auth_token: str,
+    broker: str,
+    config: Optional[dict] = None,
+) -> tuple[bool, dict[str, Any], int]:
+    """Resolve ATM-relative options using the nearest FUT LTP as reference."""
+    base = underlying.strip().upper()
+    fut_exchange = option_exchange_for(underlying_exchange)
+    fut = _find_near_month_futures(base, fut_exchange)
+    if not fut:
+        return False, {
+            "status": "error",
+            "message": f"No FUT contract found for {base} on {fut_exchange}",
+        }, 404
+
+    ok, quote_data, status_code = get_quotes_with_auth(
+        symbol=fut["symbol"],
+        exchange=fut["exchange"],
+        auth_token=auth_token,
+        broker=broker,
+        config=config,
+    )
+    if not ok:
+        return False, {
+            "status": "error",
+            "message": (
+                f"Failed to fetch FUT LTP for {fut['symbol']}: "
+                f"{quote_data.get('message', 'unknown error')}"
+            ),
+        }, status_code
+
+    fut_ltp = quote_data.get("data", {}).get("ltp")
+    if fut_ltp is None:
+        return False, {"status": "error", "message": f"LTP not available for {fut['symbol']}"}, 500
+
+    expiry_compact = expiry_date.replace("-", "").upper()
+    return get_option_symbol(
+        underlying=underlying,
+        exchange=underlying_exchange,
+        expiry_date=expiry_compact,
+        offset=atm_offset,
+        option_type=option_type,
+        auth_token=auth_token,
+        broker=broker,
+        config=config,
+        underlying_ltp=float(fut_ltp),
+    )
+
+
 def resolve_direct_strike(
     *,
     underlying: str,
@@ -211,6 +269,120 @@ def resolve_direct_strike(
         "strike": details["strike"],
         "expiry": details["expiry"],
         "underlying_ltp": None,  # not fetched in direct-strike mode
+    }, 200
+
+
+def _quote_ltp(row: dict[str, Any]) -> Optional[float]:
+    data = row.get("data") if isinstance(row.get("data"), dict) else row
+    value = data.get("ltp") if isinstance(data, dict) else None
+    if value is None:
+        value = row.get("ltp")
+    try:
+        ltp = float(value)
+    except (TypeError, ValueError):
+        return None
+    return ltp if ltp > 0 else None
+
+
+def _quote_symbol(row: dict[str, Any]) -> Optional[str]:
+    symbol = row.get("symbol")
+    if symbol:
+        return str(symbol)
+    data = row.get("data")
+    if isinstance(data, dict) and data.get("symbol"):
+        return str(data["symbol"])
+    return None
+
+
+def resolve_premium_based(
+    *,
+    underlying: str,
+    underlying_exchange: str,
+    expiry_date: str,
+    option_type: str,
+    premium_value: float,
+    mode: str,
+    auth_token: str,
+    broker: str,
+    config: Optional[dict] = None,
+) -> tuple[bool, dict[str, Any], int]:
+    """Pick the option whose live premium matches near/greater/lesser mode."""
+    base = underlying.strip().upper()
+    opt_exchange = option_exchange_for(underlying_exchange)
+    expiry_compact = expiry_date.replace("-", "").upper()
+    option_type_u = option_type.upper()
+    if not re.match(r"^\d{2}[A-Z]{3}\d{2}$", expiry_compact):
+        return False, {"status": "error", "message": f"Invalid expiry: {expiry_date}"}, 400
+    if option_type_u not in ("CE", "PE"):
+        return False, {"status": "error", "message": "option_type must be CE or PE"}, 400
+
+    strikes = _fetch_available_strikes(base, expiry_compact, option_type_u, opt_exchange)
+    if not strikes:
+        return False, {
+            "status": "error",
+            "message": f"No strikes found for {base} {expiry_compact} on {opt_exchange}.",
+        }, 404
+
+    details_by_symbol: dict[str, dict[str, Any]] = {}
+    symbols_list = []
+    for strike in strikes:
+        symbol = f"{base}{expiry_compact}{_format_strike(strike)}{option_type_u}"
+        details = _lookup_option_in_db(symbol, opt_exchange)
+        if not details:
+            continue
+        details_by_symbol[details["symbol"]] = details
+        symbols_list.append({"symbol": details["symbol"], "exchange": details["exchange"]})
+
+    if not symbols_list:
+        return False, {
+            "status": "error",
+            "message": f"No tradable option symbols found for {base} {expiry_compact} {option_type_u}.",
+        }, 404
+
+    ok, quote_data, status_code = get_multi_quotes_with_auth(
+        symbols_list=symbols_list,
+        auth_token=auth_token,
+        broker=broker,
+        config=config,
+    )
+    if not ok:
+        return False, quote_data, status_code
+
+    candidates = []
+    for row in quote_data.get("results", []):
+        symbol = _quote_symbol(row)
+        details = details_by_symbol.get(symbol)
+        ltp = _quote_ltp(row)
+        if not details or ltp is None:
+            continue
+        candidates.append((details, ltp))
+
+    if mode == "premium_greater":
+        candidates = [(d, l) for d, l in candidates if l >= premium_value]
+        key = lambda item: (item[1] - premium_value, item[0]["strike"])
+    elif mode == "premium_lesser":
+        candidates = [(d, l) for d, l in candidates if l <= premium_value]
+        key = lambda item: (premium_value - item[1], -float(item[0]["strike"]))
+    else:
+        key = lambda item: (abs(item[1] - premium_value), item[0]["strike"])
+
+    if not candidates:
+        return False, {
+            "status": "error",
+            "message": f"No option premium matched {mode.replace('_', ' ')} {premium_value}.",
+        }, 404
+
+    details, ltp = min(candidates, key=key)
+    return True, {
+        "status": "success",
+        "symbol": details["symbol"],
+        "exchange": details["exchange"],
+        "lotsize": details["lotsize"],
+        "tick_size": details["tick_size"],
+        "strike": details["strike"],
+        "expiry": details["expiry"],
+        "underlying_ltp": None,
+        "option_ltp": ltp,
     }, 200
 
 

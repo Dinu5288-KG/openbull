@@ -40,7 +40,14 @@ export type ExpiryRank =
   | "monthly"
   | "current"
   | "next";
-export type StrikeMode = "atm" | "strike";
+export type StrikeMode =
+  | "atm"
+  | "spot_based"
+  | "future_based"
+  | "strike"
+  | "premium_near"
+  | "premium_greater"
+  | "premium_lesser";
 export type Weekday = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";
 
 /**
@@ -95,6 +102,7 @@ export interface Leg {
   strike_mode?: StrikeMode | null;
   atm_offset?: string | null;
   strike_value?: number | null;
+  premium_value?: number | null;
 
   // --- Signal-mode fields (null/undefined for batch-mode legs) ---
   symbol?: string | null;

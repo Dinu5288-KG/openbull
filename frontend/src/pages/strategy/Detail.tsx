@@ -1776,14 +1776,25 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
                 </thead>
                 <tbody>
                   {strategy.legs.map((leg) => {
+                    const strikeMode = leg.strike_mode === "atm"
+                      ? "spot_based"
+                      : leg.strike_mode;
                     const strikeText =
                       leg.segment !== "options"
                         ? "—"
-                        : leg.strike_mode === "strike"
+                        : strikeMode === "strike"
                           ? leg.strike_value != null
                             ? `${leg.strike_value}`
                             : "—"
-                          : `ATM (${leg.atm_offset ?? "ATM"})`;
+                          : strikeMode === "future_based"
+                            ? `Future Based (${leg.atm_offset ?? "ATM"})`
+                            : strikeMode === "premium_near"
+                              ? `Premium near ${leg.premium_value ?? "—"}`
+                              : strikeMode === "premium_greater"
+                                ? `Premium greater ${leg.premium_value ?? "—"}`
+                                : strikeMode === "premium_lesser"
+                                  ? `Premium lesser ${leg.premium_value ?? "—"}`
+                                  : `Spot Based (${leg.atm_offset ?? "ATM"})`;
                     return (
                       <tr key={leg.id} className="border-t">
                         <td className="px-2 py-1.5 font-mono">{leg.id}</td>
