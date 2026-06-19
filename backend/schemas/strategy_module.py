@@ -26,6 +26,8 @@ class TrailConfig(BaseModel):
 
     x: float = Field(0, ge=0, description="Favorable move (pts) before trail arms")
     y: float = Field(0, ge=0, description="Trail step (pts) once armed")
+    x_type: Literal["points", "percent"] = "points"
+    y_type: Literal["points", "percent"] = "points"
 
 
 class Leg(BaseModel):
@@ -88,6 +90,8 @@ class Leg(BaseModel):
 
     target_pts: Optional[float] = Field(None, ge=0)
     sl_pts: Optional[float] = Field(None, ge=0)
+    target_type: Literal["points", "percent"] = "points"
+    sl_type: Literal["points", "percent"] = "points"
     trail: TrailConfig = Field(default_factory=TrailConfig)
 
     momentum: Optional[dict] = Field(default=None, description="v1 stub — not evaluated")

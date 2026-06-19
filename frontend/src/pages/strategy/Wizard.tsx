@@ -50,6 +50,7 @@ import {
   type LegSide,
   type Position,
   type Product,
+  type RiskValueType,
   type Segment,
   type Strategy,
   type StrategyCreate,
@@ -82,7 +83,9 @@ function freshLeg(id: number, tab: UniverseTab): Leg {
     strike_value: null,
     target_pts: null,
     sl_pts: null,
-    trail: { x: 0, y: 0 },
+    target_type: "points",
+    sl_type: "points",
+    trail: { x: 0, y: 0, x_type: "points", y_type: "points" },
     momentum: null,
   };
 }
@@ -121,7 +124,9 @@ function freshSignalLeg(id: number, tab: UniverseTab): Leg {
     qty: 1,
     target_pts: null,
     sl_pts: null,
-    trail: { x: 0, y: 0 },
+    target_type: "points",
+    sl_type: "points",
+    trail: { x: 0, y: 0, x_type: "points", y_type: "points" },
     momentum: null,
   };
 }
@@ -152,6 +157,68 @@ function expiriesFor(tab: UniverseTab, segment: Segment): ExpiryRank[] {
   if (segment === "cash") return [];
   if (segment === "futures") return ["current_month", "next_month"];
   return TAB_EXPIRIES[tab];
+}
+
+const RISK_VALUE_TYPES: Array<{ value: RiskValueType; label: string; suffix: string }> = [
+  { value: "points", label: "Pts", suffix: "pts" },
+  { value: "percent", label: "%", suffix: "%" },
+];
+
+function riskSuffix(type: RiskValueType | undefined): string {
+  return type === "percent" ? "%" : "pts";
+}
+
+interface RiskNumberInputProps {
+  label: string;
+  value: number | null | undefined;
+  valueType: RiskValueType | undefined;
+  placeholder?: string;
+  onValueChange: (value: number | null) => void;
+  onTypeChange: (valueType: RiskValueType) => void;
+  help?: string;
+}
+
+function RiskNumberInput({
+  label,
+  value,
+  valueType,
+  placeholder = "0 = off",
+  onValueChange,
+  onTypeChange,
+  help,
+}: RiskNumberInputProps) {
+  const type = valueType ?? "points";
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-xs uppercase">{label}</Label>
+      <div className="flex h-9 overflow-hidden rounded-md border border-input bg-background">
+        <Input
+          type="number"
+          step={0.01}
+          min={0}
+          value={value ?? ""}
+          placeholder={placeholder}
+          onChange={(e) =>
+            onValueChange(e.target.value === "" ? null : Number(e.target.value))
+          }
+          className="h-full rounded-none border-0 bg-transparent focus-visible:ring-0"
+        />
+        <select
+          value={type}
+          onChange={(e) => onTypeChange(e.target.value as RiskValueType)}
+          className="w-20 border-l border-input bg-muted/40 px-2 text-xs font-medium"
+          aria-label={`${label} unit`}
+        >
+          {RISK_VALUE_TYPES.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      {help && <p className="text-[10px] text-muted-foreground">{help}</p>}
+    </div>
+  );
 }
 
 function LegCard({
@@ -227,7 +294,7 @@ function LegCard({
           <div className="space-y-1.5">
             <Label className="text-xs uppercase">Expiry</Label>
             <select
-              value={leg.expiry}
+              value={leg.expiry ?? ""}
               onChange={(e) => update("expiry", e.target.value as ExpiryRank)}
               className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
             >
@@ -371,69 +438,46 @@ function LegCard({
         <Separator />
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Stop Loss (pts)</Label>
-            <Input
-              type="number"
-              step={0.01}
-              min={0}
-              value={leg.sl_pts ?? ""}
-              placeholder="0 = off"
-              onChange={(e) =>
-                update("sl_pts", e.target.value === "" ? null : Number(e.target.value))
-              }
-              className="h-9"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Target (pts)</Label>
-            <Input
-              type="number"
-              step={0.01}
-              min={0}
-              value={leg.target_pts ?? ""}
-              placeholder="0 = off"
-              onChange={(e) =>
-                update("target_pts", e.target.value === "" ? null : Number(e.target.value))
-              }
-              className="h-9"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Trail SL — X (pts)</Label>
-            <Input
-              type="number"
-              step={0.01}
-              min={0}
-              value={leg.trail.x}
-              onChange={(e) =>
-                update("trail", { ...leg.trail, x: Number(e.target.value || 0) })
-              }
-              className="h-9"
-            />
-            <p className="text-[10px] text-muted-foreground">
-              With Y blank: initial SL at entry ± X, then trails the peak 1:1 by
-              X pts. With Y set: stepped trail — arms at X, advances in Y-pt
-              steps.
-            </p>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Trail SL — Y (step, optional)</Label>
-            <Input
-              type="number"
-              step={0.01}
-              min={0}
-              value={leg.trail.y}
-              onChange={(e) =>
-                update("trail", { ...leg.trail, y: Number(e.target.value || 0) })
-              }
-              className="h-9"
-            />
-            <p className="text-[10px] text-muted-foreground">
-              Leave blank (or 0) for a classic fixed-distance trail driven by X
-              alone.
-            </p>
-          </div>
+          <RiskNumberInput
+            label={`Stop Loss (${riskSuffix(leg.sl_type)})`}
+            value={leg.sl_pts}
+            valueType={leg.sl_type}
+            onValueChange={(value) => update("sl_pts", value)}
+            onTypeChange={(valueType) => update("sl_type", valueType)}
+          />
+          <RiskNumberInput
+            label={`Target (${riskSuffix(leg.target_type)})`}
+            value={leg.target_pts}
+            valueType={leg.target_type}
+            onValueChange={(value) => update("target_pts", value)}
+            onTypeChange={(valueType) => update("target_type", valueType)}
+          />
+          <RiskNumberInput
+            label={`Trail SL — X (${riskSuffix(leg.trail.x_type)})`}
+            value={leg.trail.x}
+            valueType={leg.trail.x_type}
+            placeholder="0 = off"
+            onValueChange={(value) =>
+              update("trail", { ...leg.trail, x: value ?? 0 })
+            }
+            onTypeChange={(valueType) =>
+              update("trail", { ...leg.trail, x_type: valueType })
+            }
+            help={`With Y blank: initial SL at entry +/- X, then trails the peak 1:1 by X ${riskSuffix(leg.trail.x_type)}.`}
+          />
+          <RiskNumberInput
+            label={`Trail SL — Y (${riskSuffix(leg.trail.y_type)})`}
+            value={leg.trail.y}
+            valueType={leg.trail.y_type}
+            placeholder="0 = fixed"
+            onValueChange={(value) =>
+              update("trail", { ...leg.trail, y: value ?? 0 })
+            }
+            onTypeChange={(valueType) =>
+              update("trail", { ...leg.trail, y_type: valueType })
+            }
+            help="Leave blank or 0 for a fixed-distance trail driven by X alone."
+          />
         </div>
       </CardContent>
     </Card>
@@ -720,6 +764,49 @@ function SignalLegCard({
           </span>{" "}
           (auto-picked from strategy type and segment).
         </p>
+
+        <Separator />
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <RiskNumberInput
+            label={`Stop Loss (${riskSuffix(leg.sl_type)})`}
+            value={leg.sl_pts}
+            valueType={leg.sl_type}
+            onValueChange={(value) => update("sl_pts", value)}
+            onTypeChange={(valueType) => update("sl_type", valueType)}
+          />
+          <RiskNumberInput
+            label={`Target (${riskSuffix(leg.target_type)})`}
+            value={leg.target_pts}
+            valueType={leg.target_type}
+            onValueChange={(value) => update("target_pts", value)}
+            onTypeChange={(valueType) => update("target_type", valueType)}
+          />
+          <RiskNumberInput
+            label={`Trail SL — X (${riskSuffix(leg.trail.x_type)})`}
+            value={leg.trail.x}
+            valueType={leg.trail.x_type}
+            placeholder="0 = off"
+            onValueChange={(value) =>
+              update("trail", { ...leg.trail, x: value ?? 0 })
+            }
+            onTypeChange={(valueType) =>
+              update("trail", { ...leg.trail, x_type: valueType })
+            }
+          />
+          <RiskNumberInput
+            label={`Trail SL — Y (${riskSuffix(leg.trail.y_type)})`}
+            value={leg.trail.y}
+            valueType={leg.trail.y_type}
+            placeholder="0 = fixed"
+            onValueChange={(value) =>
+              update("trail", { ...leg.trail, y: value ?? 0 })
+            }
+            onTypeChange={(valueType) =>
+              update("trail", { ...leg.trail, y_type: valueType })
+            }
+          />
+        </div>
       </CardContent>
     </Card>
   );
@@ -1636,7 +1723,7 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
           onOpenChange={(o) => !o && setStrikePickerLegIndex(null)}
           underlying={underlying}
           underlyingExchange={underlyingExchange}
-          expiryRank={legs[strikePickerLegIndex].expiry}
+          expiryRank={legs[strikePickerLegIndex].expiry ?? "current_month"}
           optionType={legs[strikePickerLegIndex].option_type ?? "CE"}
           selectedStrike={legs[strikePickerLegIndex].strike_value ?? null}
           onPick={(strike) => {

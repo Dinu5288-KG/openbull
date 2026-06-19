@@ -158,6 +158,25 @@ function wsStatusBadge(status: WsStatus): {
   }
 }
 
+function riskUnitLabel(type?: string | null): string {
+  return type === "percent" ? "%" : "pts";
+}
+
+function formatRiskValue(value?: number | null, type?: string | null): string {
+  if (value == null || value <= 0) return "—";
+  return `${value}${riskUnitLabel(type)}`;
+}
+
+function riskValueToPoints(
+  value: number | null | undefined,
+  type: string | null | undefined,
+  entry: number | null,
+): number {
+  if (value == null || value <= 0) return 0;
+  if (type === "percent" && entry != null) return (entry * value) / 100;
+  return value;
+}
+
 /**
  * Real-time trailing-stop status for one leg. Reads the leg's trail
  * config (x = favorable move needed to arm, y = step size) and the
@@ -177,17 +196,21 @@ function TrailCell({
   leg,
   live,
 }: {
-  leg: { position: "B" | "S"; trail?: { x: number; y: number } | null };
+  leg: {
+    position: "B" | "S";
+    trail?: { x: number; y: number; x_type?: string; y_type?: string } | null;
+  };
   live: Record<string, unknown> | null | undefined;
 }) {
-  const trailX = leg.trail?.x ?? 0;
-  const trailY = leg.trail?.y ?? 0;
+  const entry =
+    typeof live?.entry_avg === "number" ? (live.entry_avg as number) : null;
+  const trailXValue = leg.trail?.x ?? 0;
+  const trailYValue = leg.trail?.y ?? 0;
+  const trailX = riskValueToPoints(trailXValue, leg.trail?.x_type, entry);
   if (!trailX || trailX <= 0) {
     return <span className="text-muted-foreground">—</span>;
   }
 
-  const entry =
-    typeof live?.entry_avg === "number" ? (live.entry_avg as number) : null;
   const peakPts =
     typeof live?.favorable_peak === "number"
       ? (live.favorable_peak as number)
@@ -226,8 +249,9 @@ function TrailCell({
             <span className="text-muted-foreground">arm pending</span>
           )}
           <span className="text-[10px] text-muted-foreground">
-            {peakPts.toFixed(2)} / {trailX} pts
-            {trailY > 0 && ` · step ${trailY}`}
+            {peakPts.toFixed(2)} / {formatRiskValue(trailXValue, leg.trail?.x_type)}
+            {trailYValue > 0 &&
+              ` · step ${formatRiskValue(trailYValue, leg.trail?.y_type)}`}
           </span>
         </>
       )}
@@ -2259,8 +2283,8 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
                 <tr>
                   <th className="px-2 py-1 text-left">#</th>
                   <th className="px-2 py-1 text-left">Type</th>
-                  <th className="px-2 py-1 text-right">SL pts</th>
-                  <th className="px-2 py-1 text-right">Target pts</th>
+                  <th className="px-2 py-1 text-right">SL</th>
+                  <th className="px-2 py-1 text-right">Target</th>
                   <th className="px-2 py-1 text-right">Trail X / Y</th>
                 </tr>
               </thead>
@@ -2275,13 +2299,14 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
                       </Badge>
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono">
-                      {leg.sl_pts ?? "—"}
+                      {formatRiskValue(leg.sl_pts, leg.sl_type)}
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono">
-                      {leg.target_pts ?? "—"}
+                      {formatRiskValue(leg.target_pts, leg.target_type)}
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono">
-                      {leg.trail.x} / {leg.trail.y}
+                      {formatRiskValue(leg.trail.x, leg.trail.x_type)} /{" "}
+                      {formatRiskValue(leg.trail.y, leg.trail.y_type)}
                     </td>
                   </tr>
                 ))}
@@ -2473,7 +2498,7 @@ export default function StrategyDetail() {
     queryKey: ["strategy-orders", numId],
     queryFn: () => listOrders(numId),
     enabled: Number.isFinite(numId) && numId > 0,
-    refetchInterval: (q) =>
+    refetchInterval: () =>
       strategyQuery.data?.status === "running" ? SAFETY_REFETCH_MS : false,
   });
 
@@ -2487,7 +2512,7 @@ export default function StrategyDetail() {
     queryKey: ["strategy-events", numId],
     queryFn: () => listEvents(numId, undefined, 200),
     enabled: Number.isFinite(numId) && numId > 0,
-    refetchInterval: (q) =>
+    refetchInterval: () =>
       strategyQuery.data?.status === "running" ? SAFETY_REFETCH_MS : false,
   });
 
@@ -2495,7 +2520,7 @@ export default function StrategyDetail() {
     queryKey: ["strategy-positions", numId],
     queryFn: () => listPositions(numId),
     enabled: Number.isFinite(numId) && numId > 0,
-    refetchInterval: (q) =>
+    refetchInterval: () =>
       strategyQuery.data?.status === "running" ? SAFETY_REFETCH_MS : false,
   });
 
@@ -2503,7 +2528,7 @@ export default function StrategyDetail() {
     queryKey: ["strategy-trades", numId],
     queryFn: () => listTrades(numId),
     enabled: Number.isFinite(numId) && numId > 0,
-    refetchInterval: (q) =>
+    refetchInterval: () =>
       strategyQuery.data?.status === "running" ? SAFETY_REFETCH_MS : false,
   });
 

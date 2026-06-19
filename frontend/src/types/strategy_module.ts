@@ -67,6 +67,7 @@ export type StrategyDirection = "long_only" | "short_only" | "both";
  * Unrelated to batch-mode's per-leg `position` (B/S).
  */
 export type LegSide = "long" | "short" | "both";
+export type RiskValueType = "points" | "percent";
 
 /** The four TradingView-style signal actions for signal-mode webhooks. */
 export type SignalAction =
@@ -78,6 +79,8 @@ export type SignalAction =
 export interface TrailConfig {
   x: number;
   y: number;
+  x_type?: RiskValueType;
+  y_type?: RiskValueType;
 }
 
 export interface Leg {
@@ -108,6 +111,8 @@ export interface Leg {
 
   target_pts?: number | null;
   sl_pts?: number | null;
+  target_type?: RiskValueType;
+  sl_type?: RiskValueType;
   trail: TrailConfig;
   momentum?: Record<string, unknown> | null;
 }

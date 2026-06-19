@@ -55,6 +55,19 @@ def _is_favorable_move(position: str, entry_avg: float, ltp: float) -> float:
     return max(0.0, entry_avg - ltp)
 
 
+def _risk_value_to_points(value: Optional[float], value_type: str, entry_avg: float) -> Optional[float]:
+    """Convert a configured risk value into price points.
+
+    Percent values are relative to the leg's entry average. Existing rows that
+    do not carry a type field are treated as points by the caller.
+    """
+    if value is None or value <= 0:
+        return None
+    if value_type == "percent":
+        return entry_avg * value / 100.0
+    return value
+
+
 def evaluate_leg(
     *,
     position: str,
@@ -65,6 +78,10 @@ def evaluate_leg(
     target_pts: Optional[float],
     trail_x: float,
     trail_y: float,
+    sl_type: str = "points",
+    target_type: str = "points",
+    trail_x_type: str = "points",
+    trail_y_type: str = "points",
     prior_favorable_peak: float = 0.0,
     prior_trail_active: bool = False,
     prior_effective_sl: Optional[float] = None,
@@ -79,15 +96,19 @@ def evaluate_leg(
     """
     sign = 1 if position == POSITION_BUY else -1
     leg_mtm = (ltp - entry_avg) * sign * qty
+    sl_points = _risk_value_to_points(sl_pts, sl_type, entry_avg)
+    target_points = _risk_value_to_points(target_pts, target_type, entry_avg)
+    trail_x_points = _risk_value_to_points(trail_x, trail_x_type, entry_avg) or 0.0
+    trail_y_points = _risk_value_to_points(trail_y, trail_y_type, entry_avg) or 0.0
 
     # Default the effective levels on first call (entry tick).
-    if prior_effective_sl is None and sl_pts and sl_pts > 0:
-        base_sl = entry_avg - sl_pts if position == POSITION_BUY else entry_avg + sl_pts
+    if prior_effective_sl is None and sl_points and sl_points > 0:
+        base_sl = entry_avg - sl_points if position == POSITION_BUY else entry_avg + sl_points
     else:
         base_sl = prior_effective_sl
 
-    if prior_effective_target is None and target_pts and target_pts > 0:
-        base_target = entry_avg + target_pts if position == POSITION_BUY else entry_avg - target_pts
+    if prior_effective_target is None and target_points and target_points > 0:
+        base_target = entry_avg + target_points if position == POSITION_BUY else entry_avg - target_points
     else:
         base_target = prior_effective_target
 
@@ -99,18 +120,18 @@ def evaluate_leg(
     new_sl = base_sl
 
     trail_fired: Optional[str] = None
-    if trail_x and trail_x > 0:
-        if trail_y and trail_y > 0:
+    if trail_x_points and trail_x_points > 0:
+        if trail_y_points and trail_y_points > 0:
             # ---- Stepped trail (X = trigger, Y = step size) ----
             # Arms only after favorable_peak >= X, then advances the SL
             # in Y-pt steps each time peak crosses an X + kY boundary.
             # Useful for locking in profit progressively.
-            if new_favorable_peak >= trail_x:
+            if new_favorable_peak >= trail_x_points:
                 if not trail_active:
                     trail_active = True
                     trail_fired = "trail_armed"
-                steps_past = int((new_favorable_peak - trail_x) // trail_y)
-                advance_pts = trail_y + steps_past * trail_y
+                steps_past = int((new_favorable_peak - trail_x_points) // trail_y_points)
+                advance_pts = trail_y_points + steps_past * trail_y_points
                 trailed_sl = (
                     entry_avg + advance_pts if position == POSITION_BUY
                     else entry_avg - advance_pts
@@ -131,9 +152,9 @@ def evaluate_leg(
             # with sl_pts: whichever stop is more favorable wins, because
             # the SL-move-favorably-only check below handles both.
             trailed_sl = (
-                entry_avg + new_favorable_peak - trail_x
+                entry_avg + new_favorable_peak - trail_x_points
                 if position == POSITION_BUY
-                else entry_avg - new_favorable_peak + trail_x
+                else entry_avg - new_favorable_peak + trail_x_points
             )
             if not trail_active:
                 trail_active = True

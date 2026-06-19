@@ -481,7 +481,7 @@ export default function Playground() {
   };
 
   const filteredEndpoints = Object.entries(endpoints).reduce<Record<string, Endpoint[]>>(
-    (acc, [category, eps]) => {
+    (acc, [category, eps]: [string, Endpoint[]]) => {
       if (!searchQuery) {
         acc[category] = eps;
       } else {
