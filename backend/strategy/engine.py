@@ -48,6 +48,97 @@ class EngineError(Exception):
     """Engine-side failure (resolution, dispatch, fill timeout, ...)."""
 
 
+def _underlying_reference_for_leg(
+    *,
+    leg: dict[str, Any],
+    resolved_leg: dict[str, Any],
+    underlying: str,
+    underlying_exchange: str,
+) -> dict[str, Any]:
+    """Return the symbol whose ticks should drive UL risk rules.
+
+    For MCX options the practical underlying is the same-expiry FUT
+    (e.g. CRUDEOIL16JUL26FUT), not the option premium. Equity/index options
+    use the configured underlying quote. Futures and cash legs are their own
+    underlying for risk purposes.
+    """
+    segment = leg.get("segment")
+    if segment in ("cash", "futures"):
+        return {
+            "underlying_symbol": resolved_leg.get("symbol"),
+            "underlying_exchange": resolved_leg.get("exchange"),
+            "underlying_entry": resolved_leg.get("underlying_ltp"),
+        }
+
+    if segment == "options" and underlying_exchange == "MCX":
+        expiry = resolved_leg.get("expiry")
+        if expiry:
+            from backend.services.option_symbol_service import _lookup_option_in_db
+
+            fut_symbol = f"{underlying}{str(expiry).replace('-', '').upper()}FUT"
+            fut = _lookup_option_in_db(fut_symbol, underlying_exchange)
+            if fut:
+                return {
+                    "underlying_symbol": fut["symbol"],
+                    "underlying_exchange": fut["exchange"],
+                    "underlying_entry": resolved_leg.get("underlying_ltp"),
+                }
+
+    return {
+        "underlying_symbol": underlying,
+        "underlying_exchange": underlying_exchange,
+        "underlying_entry": resolved_leg.get("underlying_ltp"),
+    }
+
+
+def _risk_mode(leg_config: dict[str, Any], key: str, default: str) -> str:
+    momentum = leg_config.get("momentum")
+    if isinstance(momentum, dict):
+        mode = momentum.get(key)
+        if isinstance(mode, str):
+            return mode
+    return default
+
+
+def _is_underlying_mode(mode: str) -> bool:
+    return "UL" in mode.upper()
+
+
+def _underlying_exposure_sign(leg_config: dict[str, Any], position: str) -> int:
+    option_type = leg_config.get("option_type")
+    if option_type == "PE":
+        return -1 if position == "B" else 1
+    return 1 if position == "B" else -1
+
+
+def _risk_delta(entry: float, value: Any, mode: str) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0:
+        return None
+    return entry * numeric / 100.0 if "%" in mode else numeric
+
+
+def _underlying_sl_level(
+    *,
+    leg_config: dict[str, Any],
+    position: str,
+    underlying_entry: float,
+) -> Optional[float]:
+    sl_mode = _risk_mode(leg_config, "sl_mode", "SL: pts")
+    if not _is_underlying_mode(sl_mode):
+        return None
+    sl_delta = _risk_delta(underlying_entry, leg_config.get("sl_pts"), sl_mode)
+    if sl_delta is None:
+        return None
+    exposure_sign = _underlying_exposure_sign(leg_config, position)
+    return underlying_entry - exposure_sign * sl_delta
+
+
 # ---------------------------------------------------------------------------
 # Internals — leg resolution
 # ---------------------------------------------------------------------------
@@ -414,6 +505,12 @@ async def start_run(
                     f"place order — would default to 1 unit instead of the correct lot."
                 )
             resolved_lotsize = resolved_lotsize_int
+        underlying_ref = _underlying_reference_for_leg(
+            leg=leg,
+            resolved_leg=r,
+            underlying=strategy.underlying,
+            underlying_exchange=strategy.underlying_exchange,
+        )
         resolved_legs.append({
             "leg_id": leg["id"],
             "position": leg["position"],
@@ -424,6 +521,7 @@ async def start_run(
             "tick_size": r["tick_size"],
             "strike": r.get("strike"),
             "expiry": r.get("expiry"),
+            **underlying_ref,
         })
 
     # Open a run row first — so any failure mid-placement is logged against
@@ -538,10 +636,23 @@ async def start_run(
     # something to read. Failure is non-fatal — recovery rebuilds from DB.
     try:
         entry_by_leg = {ls["leg_id"]: ls for ls in leg_summaries}
+        runtime_legs = []
+        resolved_by_leg_id = {int(r["leg_id"]): r for r in resolved_legs}
+        for leg in strategy.legs or []:
+            runtime_leg = dict(leg)
+            resolved = resolved_by_leg_id.get(int(leg["id"]))
+            if resolved:
+                runtime_leg.update({
+                    "underlying_symbol": resolved.get("underlying_symbol"),
+                    "underlying_exchange": resolved.get("underlying_exchange"),
+                    "underlying_entry": resolved.get("underlying_entry"),
+                })
+            runtime_legs.append(runtime_leg)
+
         await state_module.init_run_state(
             run_id=run.id,
             strategy_id=strategy.id,
-            strategy_legs=strategy.legs or [],
+            strategy_legs=runtime_legs,
             entry_orders_by_leg=entry_by_leg,
         )
     except Exception:
@@ -578,6 +689,12 @@ async def start_run(
             if ls.get("status") != "rejected"
             and ls.get("symbol") and ls.get("exchange")
         })
+        symbols.extend([
+            (ls["underlying_exchange"], ls["underlying_symbol"])
+            for ls in resolved_legs
+            if ls.get("underlying_symbol") and ls.get("underlying_exchange")
+        ])
+        symbols = list(dict.fromkeys(symbols))
         tick_feed.add_run_subscriptions(run.id, symbols)
     except Exception:
         logger.exception("Failed to subscribe ticks for run %d", run.id)
@@ -2120,14 +2237,33 @@ async def _apply_fill_to_state(
         leg["entry_avg"] = avg_fill_price
         leg["qty"] = filled_qty
         leg["status"] = "open"
+        cfg = next(
+            (c for c in strategy_legs if int(c.get("id", -1)) == leg_id),
+            None,
+        )
+        if leg.get("underlying_symbol") and leg.get("underlying_exchange"):
+            from backend.services.market_data_cache import get_ltp_value
+
+            underlying_fill_ltp = get_ltp_value(
+                leg["underlying_symbol"], leg["underlying_exchange"],
+            )
+            if underlying_fill_ltp is not None and underlying_fill_ltp > 0:
+                leg["underlying_entry"] = float(underlying_fill_ltp)
+                leg["underlying_ltp"] = float(underlying_fill_ltp)
+        if cfg:
+            underlying_entry = leg.get("underlying_entry")
+            if underlying_entry is not None:
+                sl_level = _underlying_sl_level(
+                    leg_config=cfg,
+                    position=cfg.get("position"),
+                    underlying_entry=float(underlying_entry),
+                )
+                if sl_level is not None:
+                    leg["effective_sl"] = sl_level
         # For signal-mode legs the current_side has already been set by
         # enter_leg before the dispatch; for batch-mode legs we look at
         # the per-leg config's 'position' (B/S) to derive the side.
         if not leg.get("current_side"):
-            cfg = next(
-                (c for c in strategy_legs if int(c.get("id", -1)) == leg_id),
-                None,
-            )
             if cfg and cfg.get("position") == "S":
                 leg["current_side"] = "short"
             elif cfg and cfg.get("position") == "B":
