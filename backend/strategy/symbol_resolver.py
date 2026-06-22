@@ -28,11 +28,15 @@ from typing import Any, Optional
 
 from backend.services.market_data_service import get_expiry_dates
 from backend.services.option_symbol_service import (
+    _apply_atm_percent,
     _fetch_available_strikes,
     _format_strike,
+    _find_atm,
     _find_near_month_futures,
     _lookup_option_in_db,
     _option_exchange_for,
+    _parse_underlying,
+    _quote_exchange_for,
     get_option_symbol,
 )
 from backend.services.quotes_service import get_multi_quotes_with_auth, get_quotes_with_auth
@@ -222,6 +226,95 @@ def resolve_future_based(
         config=config,
         underlying_ltp=float(fut_ltp),
     )
+
+
+def resolve_atm_percent(
+    *,
+    underlying: str,
+    underlying_exchange: str,
+    expiry_date: str,
+    atm_percent: float,
+    option_type: str,
+    auth_token: str,
+    broker: str,
+    config: Optional[dict] = None,
+) -> tuple[bool, dict[str, Any], int]:
+    """Resolve an option strike at ATM +/- percentage from the ATM strike."""
+    base_symbol, embedded_expiry = _parse_underlying(underlying)
+    final_expiry = (expiry_date or embedded_expiry or "").replace("-", "").upper()
+    if not re.match(r"^\d{2}[A-Z]{3}\d{2}$", final_expiry):
+        return False, {"status": "error", "message": f"Invalid expiry: {expiry_date}"}, 400
+
+    option_type_u = option_type.upper()
+    if option_type_u not in ("CE", "PE"):
+        return False, {"status": "error", "message": "option_type must be CE or PE"}, 400
+
+    quote_exchange = _quote_exchange_for(base_symbol, underlying_exchange)
+    options_exchange = option_exchange_for(quote_exchange)
+    if quote_exchange in ("NSE_INDEX", "BSE_INDEX", "NSE", "BSE"):
+        quote_symbol, quote_exchange_for_ltp = base_symbol, quote_exchange
+    elif embedded_expiry:
+        quote_symbol, quote_exchange_for_ltp = underlying.upper(), quote_exchange
+    else:
+        fut = _find_near_month_futures(base_symbol, quote_exchange)
+        if not fut:
+            return False, {
+                "status": "error",
+                "message": f"No FUT contract found for {base_symbol} on {quote_exchange}",
+            }, 404
+        quote_symbol, quote_exchange_for_ltp = fut["symbol"], fut["exchange"]
+
+    ok, quote_data, status_code = get_quotes_with_auth(
+        symbol=quote_symbol,
+        exchange=quote_exchange_for_ltp,
+        auth_token=auth_token,
+        broker=broker,
+        config=config,
+    )
+    if not ok:
+        return False, {
+            "status": "error",
+            "message": f"Failed to fetch LTP for {quote_symbol}: {quote_data.get('message', 'unknown error')}",
+        }, status_code
+
+    ltp = quote_data.get("data", {}).get("ltp")
+    if ltp is None:
+        return False, {"status": "error", "message": f"LTP not available for {quote_symbol}"}, 500
+
+    strikes = _fetch_available_strikes(base_symbol, final_expiry, option_type_u, options_exchange)
+    if not strikes:
+        return False, {
+            "status": "error",
+            "message": f"No strikes found for {base_symbol} {final_expiry} on {options_exchange}.",
+        }, 404
+
+    atm = _find_atm(float(ltp), strikes)
+    if atm is None:
+        return False, {"status": "error", "message": "Could not determine ATM strike"}, 404
+    target_strike = _apply_atm_percent(atm, atm_percent, strikes)
+    if target_strike is None:
+        return False, {"status": "error", "message": "ATM percent strike out of range"}, 400
+
+    option_symbol = f"{base_symbol}{final_expiry}{_format_strike(target_strike)}{option_type_u}"
+    details = _lookup_option_in_db(option_symbol, options_exchange)
+    if not details:
+        return False, {
+            "status": "error",
+            "message": f"Option {option_symbol} not found on {options_exchange}.",
+        }, 404
+
+    return True, {
+        "status": "success",
+        "symbol": details["symbol"],
+        "exchange": details["exchange"],
+        "lotsize": details["lotsize"],
+        "tick_size": details["tick_size"],
+        "strike": details["strike"],
+        "expiry": details["expiry"],
+        "underlying_ltp": float(ltp),
+        "atm_strike": atm,
+        "atm_percent": atm_percent,
+    }, 200
 
 
 def resolve_direct_strike(

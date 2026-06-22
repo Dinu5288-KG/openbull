@@ -1788,6 +1788,8 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
                             : "—"
                           : strikeMode === "future_based"
                             ? `Future Based (${leg.atm_offset ?? "ATM"})`
+                            : strikeMode === "atm_pct"
+                              ? `ATM ${Number(leg.atm_pct_value ?? 0) >= 0 ? "+" : ""}${leg.atm_pct_value ?? "—"}%`
                             : strikeMode === "premium_near"
                               ? `Premium near ${leg.premium_value ?? "—"}`
                               : strikeMode === "premium_greater"

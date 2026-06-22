@@ -44,6 +44,7 @@ export type StrikeMode =
   | "atm"
   | "spot_based"
   | "future_based"
+  | "atm_pct"
   | "strike"
   | "premium_near"
   | "premium_greater"
@@ -102,6 +103,7 @@ export interface Leg {
   strike_mode?: StrikeMode | null;
   atm_offset?: string | null;
   strike_value?: number | null;
+  atm_pct_value?: number | null;
   premium_value?: number | null;
 
   // --- Signal-mode fields (null/undefined for batch-mode legs) ---

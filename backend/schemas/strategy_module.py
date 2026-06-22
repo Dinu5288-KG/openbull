@@ -37,6 +37,7 @@ class Leg(BaseModel):
     Batch mode legs (parent ``strategy_kind="batch"``):
       * ``segment="options"`` requires ``option_type`` and ``strike_mode``.
       * ``strike_mode="atm"`` / ``"spot_based"`` / ``"future_based"`` requires ``atm_offset``.
+      * ``strike_mode="atm_pct"`` requires ``atm_pct_value``.
       * ``strike_mode="strike"`` requires ``strike_value``.
       * ``strike_mode="premium_*"`` requires ``premium_value``.
 
@@ -75,6 +76,7 @@ class Leg(BaseModel):
     option_type: Optional[Literal["CE", "PE"]] = None
     strike_mode: Optional[Literal[
         "atm", "spot_based", "future_based", "strike",
+        "atm_pct",
         "premium_near", "premium_greater", "premium_lesser",
     ]] = None
     atm_offset: Optional[str] = Field(
@@ -83,6 +85,7 @@ class Leg(BaseModel):
         description="ATM, ATM+1, ATM-1, ITM2, OTM3, etc.",
     )
     strike_value: Optional[float] = Field(None, gt=0)
+    atm_pct_value: Optional[float] = Field(None, description="ATM +/- percentage for strike selection")
     premium_value: Optional[float] = Field(None, gt=0)
 
     # --- Signal-mode fields (None for batch-mode legs) ---
@@ -110,6 +113,8 @@ class Leg(BaseModel):
                 raise ValueError(
                     "atm_offset required when strike_mode is spot/future based"
                 )
+            if self.strike_mode == "atm_pct" and self.atm_pct_value is None:
+                raise ValueError("atm_pct_value required when strike_mode='atm_pct'")
             if self.strike_mode == "strike" and self.strike_value is None:
                 raise ValueError("strike_value required when strike_mode='strike'")
             if self.strike_mode in (

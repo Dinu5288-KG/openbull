@@ -81,6 +81,7 @@ function freshLeg(id: number, tab: UniverseTab): Leg {
     strike_mode: "spot_based",
     atm_offset: "ATM",
     strike_value: null,
+    atm_pct_value: null,
     target_pts: null,
     sl_pts: null,
     trail: { x: 0, y: 0 },
@@ -116,6 +117,7 @@ function freshSignalLeg(id: number, tab: UniverseTab): Leg {
     strike_mode: segment === "options" ? "spot_based" : null,
     atm_offset: segment === "options" ? "ATM" : null,
     strike_value: null,
+    atm_pct_value: null,
     symbol: "",
     exchange: "",
     side: "both",
@@ -158,6 +160,7 @@ function expiriesFor(tab: UniverseTab, segment: Segment): ExpiryRank[] {
 const STRIKE_MODES: Array<{ value: StrikeMode; label: string }> = [
   { value: "spot_based", label: "Spot Based" },
   { value: "future_based", label: "Future Based" },
+  { value: "atm_pct", label: "ATM +/- %" },
   { value: "strike", label: "Strike Price" },
   { value: "premium_near", label: "Premium near" },
   { value: "premium_greater", label: "Premium greater" },
@@ -178,12 +181,13 @@ function normalizeStrikeMode(mode: StrikeMode | null | undefined): StrikeMode {
 function strikeModePatch(
   leg: Leg,
   mode: StrikeMode | null,
-): Pick<Leg, "strike_mode" | "atm_offset" | "strike_value" | "premium_value"> {
+): Pick<Leg, "strike_mode" | "atm_offset" | "strike_value" | "atm_pct_value" | "premium_value"> {
   if (!mode) {
     return {
       strike_mode: null,
       atm_offset: null,
       strike_value: null,
+      atm_pct_value: null,
       premium_value: null,
     };
   }
@@ -192,6 +196,7 @@ function strikeModePatch(
     strike_mode: normalized,
     atm_offset: SPOT_OFFSET_MODES.has(normalized) ? leg.atm_offset ?? "ATM" : null,
     strike_value: normalized === "strike" ? leg.strike_value ?? null : null,
+    atm_pct_value: normalized === "atm_pct" ? leg.atm_pct_value ?? null : null,
     premium_value: PREMIUM_MODES.has(normalized) ? leg.premium_value ?? null : null,
   };
 }
@@ -382,6 +387,23 @@ function LegCard({
                 <p className="text-xs text-muted-foreground">
                   Filtered by underlying + resolved expiry rank ({leg.expiry}).
                 </p>
+              </div>
+            ) : normalizeStrikeMode(leg.strike_mode) === "atm_pct" ? (
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-xs uppercase">ATM +/- %</Label>
+                <Input
+                  type="number"
+                  step={0.01}
+                  value={leg.atm_pct_value ?? ""}
+                  placeholder="e.g. 0.5 or -0.5"
+                  onChange={(e) =>
+                    update(
+                      "atm_pct_value",
+                      e.target.value === "" ? null : Number(e.target.value),
+                    )
+                  }
+                  className="h-9 font-mono"
+                />
               </div>
             ) : (
               <div className="space-y-1.5 sm:col-span-2">
@@ -726,6 +748,23 @@ function SignalLegCard({
                   {leg.expiry} {leg.option_type} at signal time.
                 </p>
               </div>
+            ) : normalizeStrikeMode(leg.strike_mode) === "atm_pct" ? (
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-xs uppercase">ATM +/- %</Label>
+                <Input
+                  type="number"
+                  step={0.01}
+                  value={leg.atm_pct_value ?? ""}
+                  placeholder="e.g. 0.5 or -0.5"
+                  onChange={(e) =>
+                    update(
+                      "atm_pct_value",
+                      e.target.value === "" ? null : Number(e.target.value),
+                    )
+                  }
+                  className="h-9 font-mono"
+                />
+              </div>
             ) : (
               <div className="space-y-1.5 sm:col-span-2">
                 <Label className="text-xs uppercase">Premium value</Label>
@@ -763,6 +802,7 @@ function SignalLegCard({
     </Card>
   );
 }
+
 
 interface StrikePickerProps {
   open: boolean;

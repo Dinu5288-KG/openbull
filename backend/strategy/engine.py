@@ -177,6 +177,28 @@ def _resolve_leg(
             raise EngineError(f"Leg {leg.get('id')}: {data.get('message', 'future-based resolution failed')}")
         return data
 
+    if strike_mode == "atm_pct":
+        atm_pct_value = leg.get("atm_pct_value")
+        if atm_pct_value is None:
+            raise EngineError(f"Leg {leg.get('id')}: atm_pct_value required when strike_mode=atm_pct")
+        if not auth_token or not broker:
+            raise EngineError(
+                f"Leg {leg.get('id')}: ATM percent resolution needs broker auth."
+            )
+        ok, data, _ = symbol_resolver.resolve_atm_percent(
+            underlying=underlying,
+            underlying_exchange=underlying_exchange,
+            expiry_date=resolved,
+            atm_percent=float(atm_pct_value),
+            option_type=option_type,
+            auth_token=auth_token,
+            broker=broker,
+            config=config,
+        )
+        if not ok:
+            raise EngineError(f"Leg {leg.get('id')}: {data.get('message', 'ATM percent resolution failed')}")
+        return data
+
     if strike_mode == "strike":
         strike_value = leg.get("strike_value")
         if strike_value is None:
