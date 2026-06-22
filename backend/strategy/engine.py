@@ -48,6 +48,49 @@ class EngineError(Exception):
     """Engine-side failure (resolution, dispatch, fill timeout, ...)."""
 
 
+def _underlying_reference_for_leg(
+    *,
+    leg: dict[str, Any],
+    resolved_leg: dict[str, Any],
+    underlying: str,
+    underlying_exchange: str,
+) -> dict[str, Any]:
+    """Return the symbol whose ticks should drive UL risk rules.
+
+    For MCX options the practical underlying is the same-expiry FUT
+    (e.g. CRUDEOIL16JUL26FUT), not the option premium. Equity/index options
+    use the configured underlying quote. Futures and cash legs are their own
+    underlying for risk purposes.
+    """
+    segment = leg.get("segment")
+    if segment in ("cash", "futures"):
+        return {
+            "underlying_symbol": resolved_leg.get("symbol"),
+            "underlying_exchange": resolved_leg.get("exchange"),
+            "underlying_entry": resolved_leg.get("underlying_ltp"),
+        }
+
+    if segment == "options" and underlying_exchange == "MCX":
+        expiry = resolved_leg.get("expiry")
+        if expiry:
+            from backend.services.option_symbol_service import _lookup_option_in_db
+
+            fut_symbol = f"{underlying}{str(expiry).replace('-', '').upper()}FUT"
+            fut = _lookup_option_in_db(fut_symbol, underlying_exchange)
+            if fut:
+                return {
+                    "underlying_symbol": fut["symbol"],
+                    "underlying_exchange": fut["exchange"],
+                    "underlying_entry": resolved_leg.get("underlying_ltp"),
+                }
+
+    return {
+        "underlying_symbol": underlying,
+        "underlying_exchange": underlying_exchange,
+        "underlying_entry": resolved_leg.get("underlying_ltp"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Internals — leg resolution
 # ---------------------------------------------------------------------------
@@ -414,6 +457,12 @@ async def start_run(
                     f"place order — would default to 1 unit instead of the correct lot."
                 )
             resolved_lotsize = resolved_lotsize_int
+        underlying_ref = _underlying_reference_for_leg(
+            leg=leg,
+            resolved_leg=r,
+            underlying=strategy.underlying,
+            underlying_exchange=strategy.underlying_exchange,
+        )
         resolved_legs.append({
             "leg_id": leg["id"],
             "position": leg["position"],
@@ -424,6 +473,7 @@ async def start_run(
             "tick_size": r["tick_size"],
             "strike": r.get("strike"),
             "expiry": r.get("expiry"),
+            **underlying_ref,
         })
 
     # Open a run row first — so any failure mid-placement is logged against
@@ -538,10 +588,23 @@ async def start_run(
     # something to read. Failure is non-fatal — recovery rebuilds from DB.
     try:
         entry_by_leg = {ls["leg_id"]: ls for ls in leg_summaries}
+        runtime_legs = []
+        resolved_by_leg_id = {int(r["leg_id"]): r for r in resolved_legs}
+        for leg in strategy.legs or []:
+            runtime_leg = dict(leg)
+            resolved = resolved_by_leg_id.get(int(leg["id"]))
+            if resolved:
+                runtime_leg.update({
+                    "underlying_symbol": resolved.get("underlying_symbol"),
+                    "underlying_exchange": resolved.get("underlying_exchange"),
+                    "underlying_entry": resolved.get("underlying_entry"),
+                })
+            runtime_legs.append(runtime_leg)
+
         await state_module.init_run_state(
             run_id=run.id,
             strategy_id=strategy.id,
-            strategy_legs=strategy.legs or [],
+            strategy_legs=runtime_legs,
             entry_orders_by_leg=entry_by_leg,
         )
     except Exception:
@@ -578,6 +641,12 @@ async def start_run(
             if ls.get("status") != "rejected"
             and ls.get("symbol") and ls.get("exchange")
         })
+        symbols.extend([
+            (ls["underlying_exchange"], ls["underlying_symbol"])
+            for ls in resolved_legs
+            if ls.get("underlying_symbol") and ls.get("underlying_exchange")
+        ])
+        symbols = list(dict.fromkeys(symbols))
         tick_feed.add_run_subscriptions(run.id, symbols)
     except Exception:
         logger.exception("Failed to subscribe ticks for run %d", run.id)
