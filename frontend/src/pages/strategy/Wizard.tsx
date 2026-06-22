@@ -185,6 +185,31 @@ const PREMIUM_MODES = new Set<StrikeMode>([
   "premium_lesser",
 ]);
 
+const SL_MODE_OPTIONS = ["SL: %", "SL: pts", "SL: UL %", "SL: UL pts"] as const;
+type SlModeOption = (typeof SL_MODE_OPTIONS)[number];
+
+function slModeForLeg(leg: Leg): SlModeOption {
+  const mode = (leg.momentum as { sl_mode?: string } | null | undefined)?.sl_mode;
+  return SL_MODE_OPTIONS.includes(mode as SlModeOption)
+    ? (mode as SlModeOption)
+    : "SL: pts";
+}
+
+function updateSlMode(leg: Leg, mode: SlModeOption): Leg {
+  const currentMomentum =
+    leg.momentum && typeof leg.momentum === "object" && !Array.isArray(leg.momentum)
+      ? leg.momentum
+      : {};
+
+  return {
+    ...leg,
+    momentum: {
+      ...currentMomentum,
+      sl_mode: mode,
+    },
+  };
+}
+
 function normalizeStrikeMode(mode: StrikeMode | null | undefined): StrikeMode {
   return mode === "atm" ? "spot_based" : mode ?? "spot_based";
 }
@@ -521,19 +546,35 @@ function LegCard({
         <Separator />
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Stop Loss (pts)</Label>
-            <Input
-              type="number"
-              step={0.01}
-              min={0}
-              value={leg.sl_pts ?? ""}
-              placeholder="0 = off"
-              onChange={(e) =>
-                update("sl_pts", e.target.value === "" ? null : Number(e.target.value))
-              }
-              className="h-9"
-            />
+          <div className="grid gap-2 sm:col-span-2 sm:grid-cols-[minmax(120px,0.8fr)_minmax(140px,1fr)]">
+            <div className="space-y-1.5">
+              <Label className="text-xs uppercase">SL mode</Label>
+              <select
+                value={slModeForLeg(leg)}
+                onChange={(e) => onChange(updateSlMode(leg, e.target.value as SlModeOption))}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                {SL_MODE_OPTIONS.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {mode}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs uppercase">SL value</Label>
+              <Input
+                type="number"
+                step={0.01}
+                min={0}
+                value={leg.sl_pts ?? ""}
+                placeholder="0 = off"
+                onChange={(e) =>
+                  update("sl_pts", e.target.value === "" ? null : Number(e.target.value))
+                }
+                className="h-9"
+              />
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs uppercase">Target (pts)</Label>

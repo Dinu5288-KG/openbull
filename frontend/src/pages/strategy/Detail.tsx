@@ -669,6 +669,15 @@ function buildRoundTrips(orders: StrategyOrder[]): RoundTrip[] {
 
 type ModeFilter = "all" | "live" | "sandbox";
 
+const SL_MODE_LABELS = ["SL: %", "SL: pts", "SL: UL %", "SL: UL pts"] as const;
+
+function slModeLabel(leg: { momentum?: Record<string, unknown> | null }): string {
+  const mode = leg.momentum?.sl_mode;
+  return typeof mode === "string" && SL_MODE_LABELS.includes(mode as (typeof SL_MODE_LABELS)[number])
+    ? mode
+    : "SL: pts";
+}
+
 function HistoryTab({
   runs,
   orders,
@@ -2278,7 +2287,7 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
                 <tr>
                   <th className="px-2 py-1 text-left">#</th>
                   <th className="px-2 py-1 text-left">Type</th>
-                  <th className="px-2 py-1 text-right">SL pts</th>
+                  <th className="px-2 py-1 text-right">SL</th>
                   <th className="px-2 py-1 text-right">Target pts</th>
                   <th className="px-2 py-1 text-right">Trail X / Y</th>
                 </tr>
@@ -2294,7 +2303,7 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
                       </Badge>
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono">
-                      {leg.sl_pts ?? "—"}
+                      {leg.sl_pts != null ? `${slModeLabel(leg)} ${leg.sl_pts}` : "—"}
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono">
                       {leg.target_pts ?? "—"}
