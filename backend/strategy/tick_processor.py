@@ -157,12 +157,18 @@ async def _process_tick_for_run(
         if state is None:
             return
 
-        # Find every leg matching this symbol that's still open.
+        # Find every open leg matching either the traded symbol (premium tick)
+        # or the configured underlying/FUT symbol (UL risk tick).
         matched_legs: list[tuple[str, dict]] = [
             (lid, leg) for lid, leg in state.get("legs", {}).items()
             if leg.get("status") == "open"
-            and leg.get("symbol") == symbol
-            and leg.get("exchange") == exchange
+            and (
+                (leg.get("symbol") == symbol and leg.get("exchange") == exchange)
+                or (
+                    leg.get("underlying_symbol") == symbol
+                    and leg.get("underlying_exchange") == exchange
+                )
+            )
         ]
         if not matched_legs:
             return
@@ -171,19 +177,79 @@ async def _process_tick_for_run(
         sl_leg_ids_this_tick: list[int] = []
 
         for lid, leg in matched_legs:
+            is_underlying_match = (
+                leg.get("underlying_symbol") == symbol
+                and leg.get("underlying_exchange") == exchange
+            )
+            is_traded_symbol_match = (
+                leg.get("symbol") == symbol and leg.get("exchange") == exchange
+            )
             entry_avg = leg.get("entry_avg")
             if entry_avg is None:
-                leg["ltp"] = ltp
+                if is_underlying_match:
+                    leg["underlying_ltp"] = ltp
+                    leg["underlying_entry"] = leg.get("underlying_entry") or ltp
+                if is_traded_symbol_match:
+                    leg["ltp"] = ltp
                 state_changed = True
                 continue
 
             leg_config = _find_leg_config(strategy_row.legs or [], int(lid))
+            sl_mode = _risk_mode(leg_config, "sl_mode", "SL: pts")
+            use_underlying_risk = (
+                is_underlying_match
+                and _is_underlying_mode(sl_mode)
+            )
+
+            if use_underlying_risk:
+                if is_traded_symbol_match:
+                    sign = 1 if leg.get("position") == "B" else -1
+                    leg["ltp"] = ltp
+                    leg["mtm"] = (
+                        ltp - float(entry_avg)
+                    ) * sign * int(leg.get("qty") or 0)
+                leg["underlying_ltp"] = ltp
+                underlying_entry = leg.get("underlying_entry") or ltp
+                leg["underlying_entry"] = underlying_entry
+                sl_level = _underlying_sl_level(
+                    leg_config=leg_config,
+                    position=leg.get("position"),
+                    underlying_entry=float(underlying_entry),
+                )
+                if sl_level is not None:
+                    leg["effective_sl"] = sl_level
+                state_changed = True
+
+                triggered = _underlying_sl_trigger(
+                    leg_config=leg_config,
+                    position=leg.get("position"),
+                    underlying_ltp=ltp,
+                    sl_level=sl_level,
+                )
+                if triggered:
+                    outcome = risk_evaluator.RiskOutcome(
+                        leg_mtm=float(leg.get("mtm") or 0.0),
+                        favorable_peak=float(leg.get("favorable_peak") or 0.0),
+                        trail_active=bool(leg.get("trail_active") or False),
+                        effective_sl=leg.get("effective_sl"),
+                        effective_target=leg.get("effective_target"),
+                        triggered="sl",
+                        sl_at=sl_level,
+                        target_at=None,
+                    )
+                    await _publish_risk_event(
+                        run_id, int(lid), outcome, leg, state["run_id"], symbol, ltp,
+                    )
+                    triggered_exits.append((int(lid), "exit_sl"))
+                    sl_leg_ids_this_tick.append(int(lid))
+                continue
+
             outcome = risk_evaluator.evaluate_leg(
                 position=leg.get("position"),
                 qty=int(leg.get("qty") or 0),
                 entry_avg=float(entry_avg),
                 ltp=ltp,
-                sl_pts=leg_config.get("sl_pts"),
+                sl_pts=None if _is_underlying_mode(sl_mode) else leg_config.get("sl_pts"),
                 target_pts=leg_config.get("target_pts"),
                 trail_x=float((leg_config.get("trail") or {}).get("x") or 0),
                 trail_y=float((leg_config.get("trail") or {}).get("y") or 0),
@@ -317,6 +383,72 @@ def _find_leg_config(legs: list[dict[str, Any]], leg_id: int) -> dict[str, Any]:
         if int(leg.get("id", -1)) == leg_id:
             return leg
     return {}
+
+
+def _risk_mode(leg_config: dict[str, Any], key: str, default: str) -> str:
+    momentum = leg_config.get("momentum")
+    if isinstance(momentum, dict):
+        mode = momentum.get(key)
+        if isinstance(mode, str):
+            return mode
+    return default
+
+
+def _is_underlying_mode(mode: str) -> bool:
+    return "UL" in mode.upper()
+
+
+def _underlying_exposure_sign(leg_config: dict[str, Any], position: str) -> int:
+    """Return +1 when the leg benefits from the underlying rising, else -1."""
+    option_type = leg_config.get("option_type")
+    if option_type == "PE":
+        return -1 if position == "B" else 1
+    return 1 if position == "B" else -1
+
+
+def _risk_delta(entry: float, value: Any, mode: str) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0:
+        return None
+    return entry * numeric / 100.0 if "%" in mode else numeric
+
+
+def _underlying_sl_level(
+    *,
+    leg_config: dict[str, Any],
+    position: str,
+    underlying_entry: float,
+) -> Optional[float]:
+    sl_mode = _risk_mode(leg_config, "sl_mode", "SL: pts")
+    exposure_sign = _underlying_exposure_sign(leg_config, position)
+
+    if _is_underlying_mode(sl_mode):
+        sl_delta = _risk_delta(underlying_entry, leg_config.get("sl_pts"), sl_mode)
+        if sl_delta is not None:
+            return underlying_entry - exposure_sign * sl_delta
+
+    return None
+
+
+def _underlying_sl_trigger(
+    *,
+    leg_config: dict[str, Any],
+    position: str,
+    underlying_ltp: float,
+    sl_level: Optional[float],
+) -> bool:
+    exposure_sign = _underlying_exposure_sign(leg_config, position)
+    if sl_level is not None:
+        if exposure_sign > 0 and underlying_ltp <= sl_level:
+            return True
+        if exposure_sign < 0 and underlying_ltp >= sl_level:
+            return True
+    return False
 
 
 def _publish_strategy_event(
