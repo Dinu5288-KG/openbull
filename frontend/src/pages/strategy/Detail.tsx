@@ -2490,7 +2490,7 @@ export default function StrategyDetail() {
     queryKey: ["strategy-orders", numId],
     queryFn: () => listOrders(numId),
     enabled: Number.isFinite(numId) && numId > 0,
-    refetchInterval: (q) =>
+    refetchInterval: () =>
       strategyQuery.data?.status === "running" ? SAFETY_REFETCH_MS : false,
   });
 
@@ -2504,7 +2504,7 @@ export default function StrategyDetail() {
     queryKey: ["strategy-events", numId],
     queryFn: () => listEvents(numId, undefined, 200),
     enabled: Number.isFinite(numId) && numId > 0,
-    refetchInterval: (q) =>
+    refetchInterval: () =>
       strategyQuery.data?.status === "running" ? SAFETY_REFETCH_MS : false,
   });
 
@@ -2512,7 +2512,7 @@ export default function StrategyDetail() {
     queryKey: ["strategy-positions", numId],
     queryFn: () => listPositions(numId),
     enabled: Number.isFinite(numId) && numId > 0,
-    refetchInterval: (q) =>
+    refetchInterval: () =>
       strategyQuery.data?.status === "running" ? SAFETY_REFETCH_MS : false,
   });
 
@@ -2520,7 +2520,7 @@ export default function StrategyDetail() {
     queryKey: ["strategy-trades", numId],
     queryFn: () => listTrades(numId),
     enabled: Number.isFinite(numId) && numId > 0,
-    refetchInterval: (q) =>
+    refetchInterval: () =>
       strategyQuery.data?.status === "running" ? SAFETY_REFETCH_MS : false,
   });
 
