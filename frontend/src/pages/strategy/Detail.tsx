@@ -1797,11 +1797,11 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
                                   : strikeMode === "underlying_pct"
                                     ? `${leg.underlying_pct_value ?? "—"}% of Underlying`
                             : strikeMode === "premium_near"
-                              ? `Premium near ${leg.premium_value ?? "—"}`
+                              ? `Premium close to ${leg.premium_value ?? "—"}`
                               : strikeMode === "premium_greater"
-                                ? `Premium greater ${leg.premium_value ?? "—"}`
+                                ? `Premium > than ${leg.premium_value ?? "—"}`
                                 : strikeMode === "premium_lesser"
-                                  ? `Premium lesser ${leg.premium_value ?? "—"}`
+                                  ? `Premium < than ${leg.premium_value ?? "—"}`
                                   : `Spot Based (${leg.atm_offset ?? "ATM"})`;
                     return (
                       <tr key={leg.id} className="border-t">
