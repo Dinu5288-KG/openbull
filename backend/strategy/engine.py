@@ -91,6 +91,54 @@ def _underlying_reference_for_leg(
     }
 
 
+def _risk_mode(leg_config: dict[str, Any], key: str, default: str) -> str:
+    momentum = leg_config.get("momentum")
+    if isinstance(momentum, dict):
+        mode = momentum.get(key)
+        if isinstance(mode, str):
+            return mode
+    return default
+
+
+def _is_underlying_mode(mode: str) -> bool:
+    return "UL" in mode.upper()
+
+
+def _underlying_exposure_sign(leg_config: dict[str, Any], position: str) -> int:
+    option_type = leg_config.get("option_type")
+    if option_type == "PE":
+        return -1 if position == "B" else 1
+    return 1 if position == "B" else -1
+
+
+def _risk_delta(entry: float, value: Any, mode: str) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric <= 0:
+        return None
+    return entry * numeric / 100.0 if "%" in mode else numeric
+
+
+def _underlying_sl_level(
+    *,
+    leg_config: dict[str, Any],
+    position: str,
+    underlying_entry: float,
+) -> Optional[float]:
+    sl_mode = _risk_mode(leg_config, "sl_mode", "SL: pts")
+    if not _is_underlying_mode(sl_mode):
+        return None
+    sl_delta = _risk_delta(underlying_entry, leg_config.get("sl_pts"), sl_mode)
+    if sl_delta is None:
+        return None
+    exposure_sign = _underlying_exposure_sign(leg_config, position)
+    return underlying_entry - exposure_sign * sl_delta
+
+
 # ---------------------------------------------------------------------------
 # Internals — leg resolution
 # ---------------------------------------------------------------------------
@@ -2189,6 +2237,10 @@ async def _apply_fill_to_state(
         leg["entry_avg"] = avg_fill_price
         leg["qty"] = filled_qty
         leg["status"] = "open"
+        cfg = next(
+            (c for c in strategy_legs if int(c.get("id", -1)) == leg_id),
+            None,
+        )
         if leg.get("underlying_symbol") and leg.get("underlying_exchange"):
             from backend.services.market_data_cache import get_ltp_value
 
@@ -2198,14 +2250,20 @@ async def _apply_fill_to_state(
             if underlying_fill_ltp is not None and underlying_fill_ltp > 0:
                 leg["underlying_entry"] = float(underlying_fill_ltp)
                 leg["underlying_ltp"] = float(underlying_fill_ltp)
+        if cfg:
+            underlying_entry = leg.get("underlying_entry")
+            if underlying_entry is not None:
+                sl_level = _underlying_sl_level(
+                    leg_config=cfg,
+                    position=cfg.get("position"),
+                    underlying_entry=float(underlying_entry),
+                )
+                if sl_level is not None:
+                    leg["effective_sl"] = sl_level
         # For signal-mode legs the current_side has already been set by
         # enter_leg before the dispatch; for batch-mode legs we look at
         # the per-leg config's 'position' (B/S) to derive the side.
         if not leg.get("current_side"):
-            cfg = next(
-                (c for c in strategy_legs if int(c.get("id", -1)) == leg_id),
-                None,
-            )
             if cfg and cfg.get("position") == "S":
                 leg["current_side"] = "short"
             elif cfg and cfg.get("position") == "B":
