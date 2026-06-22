@@ -2189,6 +2189,15 @@ async def _apply_fill_to_state(
         leg["entry_avg"] = avg_fill_price
         leg["qty"] = filled_qty
         leg["status"] = "open"
+        if leg.get("underlying_symbol") and leg.get("underlying_exchange"):
+            from backend.services.market_data_cache import get_ltp_value
+
+            underlying_fill_ltp = get_ltp_value(
+                leg["underlying_symbol"], leg["underlying_exchange"],
+            )
+            if underlying_fill_ltp is not None and underlying_fill_ltp > 0:
+                leg["underlying_entry"] = float(underlying_fill_ltp)
+                leg["underlying_ltp"] = float(underlying_fill_ltp)
         # For signal-mode legs the current_side has already been set by
         # enter_leg before the dispatch; for batch-mode legs we look at
         # the per-leg config's 'position' (B/S) to derive the side.
