@@ -167,10 +167,10 @@ const STRIKE_MODES: Array<{ value: StrikeMode; label: string }> = [
   { value: "atm_pct", label: "ATM +/- %" },
   { value: "straddle_width", label: "Straddle Width" },
   { value: "underlying_pct", label: "% of Underlying" },
-  { value: "strike", label: "Strike Price" },
-  { value: "premium_near", label: "Premium near" },
-  { value: "premium_greater", label: "Premium greater" },
-  { value: "premium_lesser", label: "Premium lesser" },
+  { value: "strike", label: "Specific strike" },
+  { value: "premium_near", label: "Premium close to" },
+  { value: "premium_greater", label: "Premium > than" },
+  { value: "premium_lesser", label: "Premium < than" },
 ];
 
 const SPOT_OFFSET_MODES = new Set<StrikeMode>(["atm", "spot_based", "future_based"]);
