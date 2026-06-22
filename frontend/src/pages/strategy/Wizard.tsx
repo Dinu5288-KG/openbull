@@ -187,6 +187,8 @@ const PREMIUM_MODES = new Set<StrikeMode>([
 
 const SL_MODE_OPTIONS = ["SL: %", "SL: pts", "SL: UL %", "SL: UL pts"] as const;
 type SlModeOption = (typeof SL_MODE_OPTIONS)[number];
+const TGT_MODE_OPTIONS = ["TGT: %", "TGT: pts", "TGT: UL %", "TGT: UL pts"] as const;
+type TgtModeOption = (typeof TGT_MODE_OPTIONS)[number];
 
 function slModeForLeg(leg: Leg): SlModeOption {
   const mode = (leg.momentum as { sl_mode?: string } | null | undefined)?.sl_mode;
@@ -206,6 +208,28 @@ function updateSlMode(leg: Leg, mode: SlModeOption): Leg {
     momentum: {
       ...currentMomentum,
       sl_mode: mode,
+    },
+  };
+}
+
+function tgtModeForLeg(leg: Leg): TgtModeOption {
+  const mode = (leg.momentum as { target_mode?: string } | null | undefined)?.target_mode;
+  return TGT_MODE_OPTIONS.includes(mode as TgtModeOption)
+    ? (mode as TgtModeOption)
+    : "TGT: pts";
+}
+
+function updateTgtMode(leg: Leg, mode: TgtModeOption): Leg {
+  const currentMomentum =
+    leg.momentum && typeof leg.momentum === "object" && !Array.isArray(leg.momentum)
+      ? leg.momentum
+      : {};
+
+  return {
+    ...leg,
+    momentum: {
+      ...currentMomentum,
+      target_mode: mode,
     },
   };
 }
@@ -576,19 +600,35 @@ function LegCard({
               />
             </div>
           </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs uppercase">Target (pts)</Label>
-            <Input
-              type="number"
-              step={0.01}
-              min={0}
-              value={leg.target_pts ?? ""}
-              placeholder="0 = off"
-              onChange={(e) =>
-                update("target_pts", e.target.value === "" ? null : Number(e.target.value))
-              }
-              className="h-9"
-            />
+          <div className="grid gap-2 sm:col-span-2 sm:grid-cols-[minmax(120px,0.8fr)_minmax(140px,1fr)]">
+            <div className="space-y-1.5">
+              <Label className="text-xs uppercase">Target mode</Label>
+              <select
+                value={tgtModeForLeg(leg)}
+                onChange={(e) => onChange(updateTgtMode(leg, e.target.value as TgtModeOption))}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                {TGT_MODE_OPTIONS.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {mode}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs uppercase">Target value</Label>
+              <Input
+                type="number"
+                step={0.01}
+                min={0}
+                value={leg.target_pts ?? ""}
+                placeholder="0 = off"
+                onChange={(e) =>
+                  update("target_pts", e.target.value === "" ? null : Number(e.target.value))
+                }
+                className="h-9"
+              />
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs uppercase">Trail SL — X (pts)</Label>
