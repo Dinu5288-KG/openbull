@@ -670,12 +670,20 @@ function buildRoundTrips(orders: StrategyOrder[]): RoundTrip[] {
 type ModeFilter = "all" | "live" | "sandbox";
 
 const SL_MODE_LABELS = ["SL: %", "SL: pts", "SL: UL %", "SL: UL pts"] as const;
+const TGT_MODE_LABELS = ["TGT: %", "TGT: pts", "TGT: UL %", "TGT: UL pts"] as const;
 
 function slModeLabel(leg: { momentum?: Record<string, unknown> | null }): string {
   const mode = leg.momentum?.sl_mode;
   return typeof mode === "string" && SL_MODE_LABELS.includes(mode as (typeof SL_MODE_LABELS)[number])
     ? mode
     : "SL: pts";
+}
+
+function tgtModeLabel(leg: { momentum?: Record<string, unknown> | null }): string {
+  const mode = leg.momentum?.target_mode;
+  return typeof mode === "string" && TGT_MODE_LABELS.includes(mode as (typeof TGT_MODE_LABELS)[number])
+    ? mode
+    : "TGT: pts";
 }
 
 function HistoryTab({
@@ -2288,7 +2296,7 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
                   <th className="px-2 py-1 text-left">#</th>
                   <th className="px-2 py-1 text-left">Type</th>
                   <th className="px-2 py-1 text-right">SL</th>
-                  <th className="px-2 py-1 text-right">Target pts</th>
+                  <th className="px-2 py-1 text-right">Target</th>
                   <th className="px-2 py-1 text-right">Trail X / Y</th>
                 </tr>
               </thead>
@@ -2306,7 +2314,7 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
                       {leg.sl_pts != null ? `${slModeLabel(leg)} ${leg.sl_pts}` : "—"}
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono">
-                      {leg.target_pts ?? "—"}
+                      {leg.target_pts != null ? `${tgtModeLabel(leg)} ${leg.target_pts}` : "—"}
                     </td>
                     <td className="px-2 py-1.5 text-right font-mono">
                       {leg.trail.x} / {leg.trail.y}
