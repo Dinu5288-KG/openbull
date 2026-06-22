@@ -1792,8 +1792,10 @@ function SetupTab({ strategy }: { strategy: Strategy }) {
                               ? `ATM ${Number(leg.atm_pct_value ?? 0) >= 0 ? "+" : ""}${leg.atm_pct_value ?? "—"}%`
                               : strikeMode === "straddle_width"
                                 ? `Straddle ${Number(leg.straddle_width_value ?? 0) >= 0 ? "+" : ""}${leg.straddle_width_value ?? "—"}`
-                                : strikeMode === "underlying_pct"
-                                  ? `${leg.underlying_pct_value ?? "—"}% of Underlying`
+                                : strikeMode === "straddle_premium"
+                                  ? `Straddle premium ${leg.straddle_premium_value ?? "—"}%`
+                                  : strikeMode === "underlying_pct"
+                                    ? `${leg.underlying_pct_value ?? "—"}% of Underlying`
                             : strikeMode === "premium_near"
                               ? `Premium near ${leg.premium_value ?? "—"}`
                               : strikeMode === "premium_greater"

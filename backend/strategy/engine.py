@@ -223,6 +223,36 @@ def _resolve_leg(
             raise EngineError(f"Leg {leg.get('id')}: {data.get('message', 'straddle-width resolution failed')}")
         return data
 
+    if strike_mode == "straddle_premium":
+        straddle_premium_value = leg.get("straddle_premium_value")
+        straddle_premium_match = leg.get("straddle_premium_match")
+        if straddle_premium_value is None:
+            raise EngineError(
+                f"Leg {leg.get('id')}: straddle_premium_value required when strike_mode=straddle_premium"
+            )
+        if straddle_premium_match is None:
+            raise EngineError(
+                f"Leg {leg.get('id')}: straddle_premium_match required when strike_mode=straddle_premium"
+            )
+        if not auth_token or not broker:
+            raise EngineError(
+                f"Leg {leg.get('id')}: straddle-premium resolution needs broker auth."
+            )
+        ok, data, _ = symbol_resolver.resolve_straddle_premium(
+            underlying=underlying,
+            underlying_exchange=underlying_exchange,
+            expiry_date=resolved,
+            percent=float(straddle_premium_value),
+            match_mode=str(straddle_premium_match),
+            option_type=option_type,
+            auth_token=auth_token,
+            broker=broker,
+            config=config,
+        )
+        if not ok:
+            raise EngineError(f"Leg {leg.get('id')}: {data.get('message', 'straddle-premium resolution failed')}")
+        return data
+
     if strike_mode == "underlying_pct":
         underlying_pct_value = leg.get("underlying_pct_value")
         if underlying_pct_value is None:

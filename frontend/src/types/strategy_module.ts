@@ -46,6 +46,7 @@ export type StrikeMode =
   | "future_based"
   | "atm_pct"
   | "straddle_width"
+  | "straddle_premium"
   | "underlying_pct"
   | "strike"
   | "premium_near"
@@ -107,6 +108,8 @@ export interface Leg {
   strike_value?: number | null;
   atm_pct_value?: number | null;
   straddle_width_value?: number | null;
+  straddle_premium_value?: number | null;
+  straddle_premium_match?: "premium_near" | "premium_greater" | "premium_lesser" | null;
   underlying_pct_value?: number | null;
   premium_value?: number | null;
 

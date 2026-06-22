@@ -215,6 +215,11 @@ def _apply_straddle_width(atm: float, straddle_premium: float, width: float, str
     return min(strikes, key=lambda s: abs(s - target))
 
 
+def _straddle_premium_target(straddle_premium: float, percent: float) -> float:
+    """Return the target option premium as a percentage of ATM straddle premium."""
+    return straddle_premium * percent / 100
+
+
 def _underlying_percent_premium(underlying_ltp: float, percent: float) -> float:
     """Premium target equal to a percentage of the underlying reference price."""
     return underlying_ltp * percent / 100

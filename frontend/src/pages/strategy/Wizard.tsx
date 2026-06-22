@@ -83,6 +83,8 @@ function freshLeg(id: number, tab: UniverseTab): Leg {
     strike_value: null,
     atm_pct_value: null,
     straddle_width_value: null,
+    straddle_premium_value: null,
+    straddle_premium_match: "premium_near",
     underlying_pct_value: null,
     target_pts: null,
     sl_pts: null,
@@ -121,6 +123,8 @@ function freshSignalLeg(id: number, tab: UniverseTab): Leg {
     strike_value: null,
     atm_pct_value: null,
     straddle_width_value: null,
+    straddle_premium_value: null,
+    straddle_premium_match: "premium_near",
     underlying_pct_value: null,
     symbol: "",
     exchange: "",
@@ -166,6 +170,7 @@ const STRIKE_MODES: Array<{ value: StrikeMode; label: string }> = [
   { value: "future_based", label: "Future Based" },
   { value: "atm_pct", label: "ATM +/- %" },
   { value: "straddle_width", label: "Straddle Width" },
+  { value: "straddle_premium", label: "Straddle premium" },
   { value: "underlying_pct", label: "% of Underlying" },
   { value: "strike", label: "Specific strike" },
   { value: "premium_near", label: "Premium close to" },
@@ -187,7 +192,7 @@ function normalizeStrikeMode(mode: StrikeMode | null | undefined): StrikeMode {
 function strikeModePatch(
   leg: Leg,
   mode: StrikeMode | null,
-): Pick<Leg, "strike_mode" | "atm_offset" | "strike_value" | "atm_pct_value" | "straddle_width_value" | "underlying_pct_value" | "premium_value"> {
+): Pick<Leg, "strike_mode" | "atm_offset" | "strike_value" | "atm_pct_value" | "straddle_width_value" | "straddle_premium_value" | "straddle_premium_match" | "underlying_pct_value" | "premium_value"> {
   if (!mode) {
     return {
       strike_mode: null,
@@ -195,6 +200,8 @@ function strikeModePatch(
       strike_value: null,
       atm_pct_value: null,
       straddle_width_value: null,
+      straddle_premium_value: null,
+      straddle_premium_match: null,
       underlying_pct_value: null,
       premium_value: null,
     };
@@ -206,6 +213,8 @@ function strikeModePatch(
     strike_value: normalized === "strike" ? leg.strike_value ?? null : null,
     atm_pct_value: normalized === "atm_pct" ? leg.atm_pct_value ?? null : null,
     straddle_width_value: normalized === "straddle_width" ? leg.straddle_width_value ?? null : null,
+    straddle_premium_value: normalized === "straddle_premium" ? leg.straddle_premium_value ?? null : null,
+    straddle_premium_match: normalized === "straddle_premium" ? leg.straddle_premium_match ?? "premium_near" : null,
     underlying_pct_value: normalized === "underlying_pct" ? leg.underlying_pct_value ?? null : null,
     premium_value: PREMIUM_MODES.has(normalized) ? leg.premium_value ?? null : null,
   };
@@ -431,6 +440,43 @@ function LegCard({
                   }
                   className="h-9 font-mono"
                 />
+              </div>
+            ) : normalizeStrikeMode(leg.strike_mode) === "straddle_premium" ? (
+              <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase">Premium match</Label>
+                  <select
+                    value={leg.straddle_premium_match ?? "premium_near"}
+                    onChange={(e) =>
+                      update(
+                        "straddle_premium_match",
+                        e.target.value as Leg["straddle_premium_match"],
+                      )
+                    }
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  >
+                    <option value="premium_near">Close to</option>
+                    <option value="premium_greater">Higher than</option>
+                    <option value="premium_lesser">Lower than</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase">% of straddle premium</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={leg.straddle_premium_value ?? ""}
+                    placeholder="e.g. 50"
+                    onChange={(e) =>
+                      update(
+                        "straddle_premium_value",
+                        e.target.value === "" ? null : Number(e.target.value),
+                      )
+                    }
+                    className="h-9 font-mono"
+                  />
+                </div>
               </div>
             ) : normalizeStrikeMode(leg.strike_mode) === "underlying_pct" ? (
               <div className="space-y-1.5 sm:col-span-2">
@@ -826,6 +872,43 @@ function SignalLegCard({
                   }
                   className="h-9 font-mono"
                 />
+              </div>
+            ) : normalizeStrikeMode(leg.strike_mode) === "straddle_premium" ? (
+              <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase">Premium match</Label>
+                  <select
+                    value={leg.straddle_premium_match ?? "premium_near"}
+                    onChange={(e) =>
+                      update(
+                        "straddle_premium_match",
+                        e.target.value as Leg["straddle_premium_match"],
+                      )
+                    }
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  >
+                    <option value="premium_near">Close to</option>
+                    <option value="premium_greater">Higher than</option>
+                    <option value="premium_lesser">Lower than</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase">% of straddle premium</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={leg.straddle_premium_value ?? ""}
+                    placeholder="e.g. 50"
+                    onChange={(e) =>
+                      update(
+                        "straddle_premium_value",
+                        e.target.value === "" ? null : Number(e.target.value),
+                      )
+                    }
+                    className="h-9 font-mono"
+                  />
+                </div>
               </div>
             ) : normalizeStrikeMode(leg.strike_mode) === "underlying_pct" ? (
               <div className="space-y-1.5 sm:col-span-2">
