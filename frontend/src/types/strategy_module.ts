@@ -46,6 +46,7 @@ export type StrikeMode =
   | "future_based"
   | "atm_pct"
   | "straddle_width"
+  | "underlying_pct"
   | "strike"
   | "premium_near"
   | "premium_greater"
@@ -106,6 +107,7 @@ export interface Leg {
   strike_value?: number | null;
   atm_pct_value?: number | null;
   straddle_width_value?: number | null;
+  underlying_pct_value?: number | null;
   premium_value?: number | null;
 
   // --- Signal-mode fields (null/undefined for batch-mode legs) ---

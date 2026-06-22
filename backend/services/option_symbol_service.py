@@ -215,6 +215,11 @@ def _apply_straddle_width(atm: float, straddle_premium: float, width: float, str
     return min(strikes, key=lambda s: abs(s - target))
 
 
+def _underlying_percent_premium(underlying_ltp: float, percent: float) -> float:
+    """Premium target equal to a percentage of the underlying reference price."""
+    return underlying_ltp * percent / 100
+
+
 def _format_strike(strike: float) -> str:
     return str(int(strike)) if strike == int(strike) else str(strike)
 

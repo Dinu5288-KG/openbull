@@ -38,6 +38,7 @@ from backend.services.option_symbol_service import (
     _option_exchange_for,
     _parse_underlying,
     _quote_exchange_for,
+    _underlying_percent_premium,
     get_option_symbol,
 )
 from backend.services.quotes_service import get_multi_quotes_with_auth, get_quotes_with_auth
@@ -448,6 +449,78 @@ def resolve_straddle_width(
         "atm_ce_premium": premiums["CE"],
         "atm_pe_premium": premiums["PE"],
     }, 200
+
+
+def resolve_underlying_percent(
+    *,
+    underlying: str,
+    underlying_exchange: str,
+    expiry_date: str,
+    percent: float,
+    option_type: str,
+    auth_token: str,
+    broker: str,
+    config: Optional[dict] = None,
+) -> tuple[bool, dict[str, Any], int]:
+    """Pick the option whose premium is closest to percent of underlying LTP."""
+    base_symbol, embedded_expiry = _parse_underlying(underlying)
+    final_expiry = (expiry_date or embedded_expiry or "").replace("-", "").upper()
+    if not re.match(r"^\d{2}[A-Z]{3}\d{2}$", final_expiry):
+        return False, {"status": "error", "message": f"Invalid expiry: {expiry_date}"}, 400
+
+    option_type_u = option_type.upper()
+    if option_type_u not in ("CE", "PE"):
+        return False, {"status": "error", "message": "option_type must be CE or PE"}, 400
+
+    quote_exchange = _quote_exchange_for(base_symbol, underlying_exchange)
+    if quote_exchange in ("NSE_INDEX", "BSE_INDEX", "NSE", "BSE"):
+        quote_symbol, quote_exchange_for_ltp = base_symbol, quote_exchange
+    elif embedded_expiry:
+        quote_symbol, quote_exchange_for_ltp = underlying.upper(), quote_exchange
+    else:
+        fut = _find_near_month_futures(base_symbol, quote_exchange)
+        if not fut:
+            return False, {
+                "status": "error",
+                "message": f"No FUT contract found for {base_symbol} on {quote_exchange}",
+            }, 404
+        quote_symbol, quote_exchange_for_ltp = fut["symbol"], fut["exchange"]
+
+    ok, quote_data, status_code = get_quotes_with_auth(
+        symbol=quote_symbol,
+        exchange=quote_exchange_for_ltp,
+        auth_token=auth_token,
+        broker=broker,
+        config=config,
+    )
+    if not ok:
+        return False, {
+            "status": "error",
+            "message": f"Failed to fetch LTP for {quote_symbol}: {quote_data.get('message', 'unknown error')}",
+        }, status_code
+
+    ltp = quote_data.get("data", {}).get("ltp")
+    if ltp is None:
+        return False, {"status": "error", "message": f"LTP not available for {quote_symbol}"}, 500
+
+    target_premium = _underlying_percent_premium(float(ltp), percent)
+    ok, data, status_code = resolve_premium_based(
+        underlying=underlying,
+        underlying_exchange=underlying_exchange,
+        expiry_date=final_expiry,
+        option_type=option_type_u,
+        premium_value=target_premium,
+        mode="premium_near",
+        auth_token=auth_token,
+        broker=broker,
+        config=config,
+    )
+    if not ok:
+        return False, data, status_code
+    data["underlying_ltp"] = float(ltp)
+    data["underlying_percent"] = percent
+    data["target_premium"] = target_premium
+    return True, data, 200
 
 
 def resolve_direct_strike(

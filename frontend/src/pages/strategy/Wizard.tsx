@@ -83,6 +83,7 @@ function freshLeg(id: number, tab: UniverseTab): Leg {
     strike_value: null,
     atm_pct_value: null,
     straddle_width_value: null,
+    underlying_pct_value: null,
     target_pts: null,
     sl_pts: null,
     trail: { x: 0, y: 0 },
@@ -120,6 +121,7 @@ function freshSignalLeg(id: number, tab: UniverseTab): Leg {
     strike_value: null,
     atm_pct_value: null,
     straddle_width_value: null,
+    underlying_pct_value: null,
     symbol: "",
     exchange: "",
     side: "both",
@@ -164,6 +166,7 @@ const STRIKE_MODES: Array<{ value: StrikeMode; label: string }> = [
   { value: "future_based", label: "Future Based" },
   { value: "atm_pct", label: "ATM +/- %" },
   { value: "straddle_width", label: "Straddle Width" },
+  { value: "underlying_pct", label: "% of Underlying" },
   { value: "strike", label: "Strike Price" },
   { value: "premium_near", label: "Premium near" },
   { value: "premium_greater", label: "Premium greater" },
@@ -184,7 +187,7 @@ function normalizeStrikeMode(mode: StrikeMode | null | undefined): StrikeMode {
 function strikeModePatch(
   leg: Leg,
   mode: StrikeMode | null,
-): Pick<Leg, "strike_mode" | "atm_offset" | "strike_value" | "atm_pct_value" | "straddle_width_value" | "premium_value"> {
+): Pick<Leg, "strike_mode" | "atm_offset" | "strike_value" | "atm_pct_value" | "straddle_width_value" | "underlying_pct_value" | "premium_value"> {
   if (!mode) {
     return {
       strike_mode: null,
@@ -192,6 +195,7 @@ function strikeModePatch(
       strike_value: null,
       atm_pct_value: null,
       straddle_width_value: null,
+      underlying_pct_value: null,
       premium_value: null,
     };
   }
@@ -202,6 +206,7 @@ function strikeModePatch(
     strike_value: normalized === "strike" ? leg.strike_value ?? null : null,
     atm_pct_value: normalized === "atm_pct" ? leg.atm_pct_value ?? null : null,
     straddle_width_value: normalized === "straddle_width" ? leg.straddle_width_value ?? null : null,
+    underlying_pct_value: normalized === "underlying_pct" ? leg.underlying_pct_value ?? null : null,
     premium_value: PREMIUM_MODES.has(normalized) ? leg.premium_value ?? null : null,
   };
 }
@@ -421,6 +426,24 @@ function LegCard({
                   onChange={(e) =>
                     update(
                       "straddle_width_value",
+                      e.target.value === "" ? null : Number(e.target.value),
+                    )
+                  }
+                  className="h-9 font-mono"
+                />
+              </div>
+            ) : normalizeStrikeMode(leg.strike_mode) === "underlying_pct" ? (
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-xs uppercase">% of underlying</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={leg.underlying_pct_value ?? ""}
+                  placeholder="e.g. 1 or 0.5"
+                  onChange={(e) =>
+                    update(
+                      "underlying_pct_value",
                       e.target.value === "" ? null : Number(e.target.value),
                     )
                   }
@@ -804,6 +827,24 @@ function SignalLegCard({
                   className="h-9 font-mono"
                 />
               </div>
+            ) : normalizeStrikeMode(leg.strike_mode) === "underlying_pct" ? (
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-xs uppercase">% of underlying</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={leg.underlying_pct_value ?? ""}
+                  placeholder="e.g. 1 or 0.5"
+                  onChange={(e) =>
+                    update(
+                      "underlying_pct_value",
+                      e.target.value === "" ? null : Number(e.target.value),
+                    )
+                  }
+                  className="h-9 font-mono"
+                />
+              </div>
             ) : (
               <div className="space-y-1.5 sm:col-span-2">
                 <Label className="text-xs uppercase">Premium value</Label>
@@ -841,6 +882,7 @@ function SignalLegCard({
     </Card>
   );
 }
+
 
 
 

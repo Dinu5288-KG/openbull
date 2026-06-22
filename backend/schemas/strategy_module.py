@@ -39,6 +39,7 @@ class Leg(BaseModel):
       * ``strike_mode="atm"`` / ``"spot_based"`` / ``"future_based"`` requires ``atm_offset``.
       * ``strike_mode="atm_pct"`` requires ``atm_pct_value``.
       * ``strike_mode="straddle_width"`` requires ``straddle_width_value``.
+      * ``strike_mode="underlying_pct"`` requires ``underlying_pct_value``.
       * ``strike_mode="strike"`` requires ``strike_value``.
       * ``strike_mode="premium_*"`` requires ``premium_value``.
 
@@ -77,7 +78,7 @@ class Leg(BaseModel):
     option_type: Optional[Literal["CE", "PE"]] = None
     strike_mode: Optional[Literal[
         "atm", "spot_based", "future_based", "strike",
-        "atm_pct", "straddle_width",
+        "atm_pct", "straddle_width", "underlying_pct",
         "premium_near", "premium_greater", "premium_lesser",
     ]] = None
     atm_offset: Optional[str] = Field(
@@ -88,6 +89,7 @@ class Leg(BaseModel):
     strike_value: Optional[float] = Field(None, gt=0)
     atm_pct_value: Optional[float] = Field(None, description="ATM +/- percentage for strike selection")
     straddle_width_value: Optional[float] = Field(None, description="Signed straddle width multiplier")
+    underlying_pct_value: Optional[float] = Field(None, gt=0, description="Option premium target as percent of underlying")
     premium_value: Optional[float] = Field(None, gt=0)
 
     # --- Signal-mode fields (None for batch-mode legs) ---
@@ -119,6 +121,8 @@ class Leg(BaseModel):
                 raise ValueError("atm_pct_value required when strike_mode='atm_pct'")
             if self.strike_mode == "straddle_width" and self.straddle_width_value is None:
                 raise ValueError("straddle_width_value required when strike_mode='straddle_width'")
+            if self.strike_mode == "underlying_pct" and self.underlying_pct_value is None:
+                raise ValueError("underlying_pct_value required when strike_mode='underlying_pct'")
             if self.strike_mode == "strike" and self.strike_value is None:
                 raise ValueError("strike_value required when strike_mode='strike'")
             if self.strike_mode in (
