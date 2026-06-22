@@ -68,6 +68,14 @@ import {
   type WsStatus,
 } from "@/hooks/useStrategyWebSocket";
 
+const TRIGGER_OPERATOR_LABELS: Record<string, string> = {
+  equal_to: "Equal To",
+  is_above: "Is Above",
+  is_below: "Is Below",
+  equal_or_above: "Equal Or Above",
+  equal_or_below: "Equal Or Below",
+};
+
 function statusBadgeVariant(
   status: StrategyStatus,
 ): "default" | "secondary" | "destructive" | "outline" {
@@ -2261,30 +2269,53 @@ function RiskTab({ strategy }: { strategy: Strategy }) {
                   <th className="px-2 py-1 text-left">Type</th>
                   <th className="px-2 py-1 text-right">SL pts</th>
                   <th className="px-2 py-1 text-right">Target pts</th>
+                  <th className="px-2 py-1 text-left">Underlying entry</th>
+                  <th className="px-2 py-1 text-left">Underlying risk</th>
+                  <th className="px-2 py-1 text-left">Re-entry</th>
                   <th className="px-2 py-1 text-right">Trail X / Y</th>
                 </tr>
               </thead>
               <tbody>
-                {strategy.legs.map((leg) => (
-                  <tr key={leg.id} className="border-t">
-                    <td className="px-2 py-1.5">{leg.id}</td>
-                    <td className="px-2 py-1.5">
-                      <Badge variant="outline" className="text-xs">
-                        {leg.position} · {leg.segment}
-                        {leg.option_type ? ` · ${leg.option_type}` : ""}
-                      </Badge>
-                    </td>
-                    <td className="px-2 py-1.5 text-right font-mono">
-                      {leg.sl_pts ?? "—"}
-                    </td>
-                    <td className="px-2 py-1.5 text-right font-mono">
-                      {leg.target_pts ?? "—"}
-                    </td>
-                    <td className="px-2 py-1.5 text-right font-mono">
-                      {leg.trail.x} / {leg.trail.y}
-                    </td>
-                  </tr>
-                ))}
+                {strategy.legs.map((leg) => {
+                  const underlyingEntry = leg.underlying_entry
+                    ? `${TRIGGER_OPERATOR_LABELS[leg.underlying_entry.operator] ?? leg.underlying_entry.operator} ${leg.underlying_entry.value}`
+                    : "—";
+                  const underlyingRisk = leg.underlying_risk
+                    ? `SL ${leg.underlying_risk.sl_pts ?? "—"} / Tgt ${leg.underlying_risk.target_pts ?? "—"}`
+                    : "—";
+                  const reentry = leg.reentry
+                    ? `${leg.reentry.mode} × ${leg.reentry.max_count} (${leg.reentry.on})`
+                    : "—";
+                  return (
+                    <tr key={leg.id} className="border-t">
+                      <td className="px-2 py-1.5">{leg.id}</td>
+                      <td className="px-2 py-1.5">
+                        <Badge variant="outline" className="text-xs">
+                          {leg.position} · {leg.segment}
+                          {leg.option_type ? ` · ${leg.option_type}` : ""}
+                        </Badge>
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-mono">
+                        {leg.sl_pts ?? "—"}
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-mono">
+                        {leg.target_pts ?? "—"}
+                      </td>
+                      <td className="px-2 py-1.5 font-mono">
+                        {underlyingEntry}
+                      </td>
+                      <td className="px-2 py-1.5 font-mono">
+                        {underlyingRisk}
+                      </td>
+                      <td className="px-2 py-1.5 font-mono">
+                        {reentry}
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-mono">
+                        {leg.trail.x} / {leg.trail.y}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

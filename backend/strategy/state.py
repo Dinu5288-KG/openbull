@@ -93,13 +93,22 @@ def _build_initial_state(
             "entry_avg": None,
             "ltp": None,
             "mtm": 0.0,
-            "status": "rejected" if entry and entry["status"] == "rejected" else (
-                "open" if entry else "configured"
+            "status": (
+                "rejected" if entry and entry["status"] == "rejected"
+                else "open" if entry and entry["status"] == "open"
+                else "configured"
             ),
             "exit_order_id": None,
             "exit_kind": None,
             "effective_sl": None,
             "effective_target": None,
+            "underlying_entry": leg.get("underlying_entry"),
+            "underlying_risk": leg.get("underlying_risk"),
+            "reentry": leg.get("reentry"),
+            "entry_count": 1 if entry and entry.get("status") == "open" else 0,
+            "reentry_count": 0,
+            "last_exit_kind": None,
+            "last_exit_price": None,
             "trail_active": False,
             "favorable_peak": 0.0,
         }

@@ -56,6 +56,7 @@ import {
   type StrategyDirection,
   type StrategyKind,
   type StrategyType,
+  type TriggerOperator,
   type StrategyUpdate,
   type UniverseTab,
 } from "@/types/strategy_module";
@@ -67,6 +68,18 @@ const TABS: UniverseTab[] = [
   "stocks_fno",
   "mcx",
 ];
+
+const TRIGGER_OPERATOR_LABELS: Record<TriggerOperator, string> = {
+  equal_to: "Equal To",
+  is_above: "Is Above",
+  is_below: "Is Below",
+  equal_or_above: "Equal Or Above",
+  equal_or_below: "Equal Or Below",
+};
+
+const TRIGGER_OPERATORS = Object.keys(
+  TRIGGER_OPERATOR_LABELS,
+) as TriggerOperator[];
 
 function freshLeg(id: number, tab: UniverseTab): Leg {
   const allowedExpiries = expiriesFor(tab, "options");
@@ -83,6 +96,9 @@ function freshLeg(id: number, tab: UniverseTab): Leg {
     target_pts: null,
     sl_pts: null,
     trail: { x: 0, y: 0 },
+    underlying_entry: null,
+    underlying_risk: null,
+    reentry: null,
     momentum: null,
   };
 }
@@ -433,6 +449,168 @@ function LegCard({
               Leave blank (or 0) for a classic fixed-distance trail driven by X
               alone.
             </p>
+          </div>
+        </div>
+
+        <Separator />
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Underlying entry</Label>
+            <select
+              value={leg.underlying_entry?.operator ?? ""}
+              onChange={(e) =>
+                update(
+                  "underlying_entry",
+                  e.target.value
+                    ? {
+                        operator: e.target.value as TriggerOperator,
+                        value: leg.underlying_entry?.value ?? 0,
+                      }
+                    : null,
+                )
+              }
+              className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="">Off</option>
+              {TRIGGER_OPERATORS.map((op) => (
+                <option key={op} value={op}>
+                  {TRIGGER_OPERATOR_LABELS[op]}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Underlying trigger value</Label>
+            <Input
+              type="number"
+              step={0.01}
+              min={0}
+              disabled={!leg.underlying_entry}
+              value={leg.underlying_entry?.value ?? ""}
+              placeholder="Spot/Future level"
+              onChange={(e) =>
+                update(
+                  "underlying_entry",
+                  leg.underlying_entry
+                    ? {
+                        ...leg.underlying_entry,
+                        value: e.target.value === "" ? 0 : Number(e.target.value),
+                      }
+                    : null,
+                )
+              }
+              className="h-9"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Re-entry mode</Label>
+            <select
+              value={leg.reentry?.mode ?? ""}
+              onChange={(e) =>
+                update(
+                  "reentry",
+                  e.target.value
+                    ? {
+                        mode: e.target.value as "reentry" | "recost" | "reexecute",
+                        max_count: leg.reentry?.max_count ?? 1,
+                        on: leg.reentry?.on ?? "sl_or_target",
+                      }
+                    : null,
+                )
+              }
+              className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="">Off</option>
+              <option value="reentry">Re-entry</option>
+              <option value="recost">Re-cost</option>
+              <option value="reexecute">Re-execute</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-4">
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Underlying SL (pts)</Label>
+            <Input
+              type="number"
+              step={0.01}
+              min={0}
+              value={leg.underlying_risk?.sl_pts ?? ""}
+              placeholder="0 = off"
+              onChange={(e) =>
+                update("underlying_risk", {
+                  ...(leg.underlying_risk ?? {}),
+                  sl_pts: e.target.value === "" ? null : Number(e.target.value),
+                  target_pts: leg.underlying_risk?.target_pts ?? null,
+                })
+              }
+              className="h-9"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Underlying target (pts)</Label>
+            <Input
+              type="number"
+              step={0.01}
+              min={0}
+              value={leg.underlying_risk?.target_pts ?? ""}
+              placeholder="0 = off"
+              onChange={(e) =>
+                update("underlying_risk", {
+                  ...(leg.underlying_risk ?? {}),
+                  sl_pts: leg.underlying_risk?.sl_pts ?? null,
+                  target_pts: e.target.value === "" ? null : Number(e.target.value),
+                })
+              }
+              className="h-9"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Re-entry count</Label>
+            <Input
+              type="number"
+              step={1}
+              min={0}
+              disabled={!leg.reentry}
+              value={leg.reentry?.max_count ?? ""}
+              placeholder="0 = off"
+              onChange={(e) =>
+                update(
+                  "reentry",
+                  leg.reentry
+                    ? {
+                        ...leg.reentry,
+                        max_count: e.target.value === "" ? 0 : Number(e.target.value),
+                      }
+                    : null,
+                )
+              }
+              className="h-9"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs uppercase">Re-entry on</Label>
+            <select
+              disabled={!leg.reentry}
+              value={leg.reentry?.on ?? "sl_or_target"}
+              onChange={(e) =>
+                update(
+                  "reentry",
+                  leg.reentry
+                    ? {
+                        ...leg.reentry,
+                        on: e.target.value as "sl" | "target" | "sl_or_target",
+                      }
+                    : null,
+                )
+              }
+              className="flex h-9 w-full rounded-md border border-input bg-background px-2 text-sm disabled:opacity-50"
+            >
+              <option value="sl_or_target">SL or Target</option>
+              <option value="sl">SL only</option>
+              <option value="target">Target only</option>
+            </select>
           </div>
         </div>
       </CardContent>
@@ -1070,6 +1248,18 @@ export default function StrategyWizard({ editing }: StrategyWizardProps = {}) {
         }
         if (!leg.qty || leg.qty < 1) {
           toast.error(`Leg ${leg.id}: quantity must be at least 1`);
+          return;
+        }
+      }
+    }
+    if (!isSignal) {
+      for (const leg of legs) {
+        if (leg.underlying_entry && leg.underlying_entry.value <= 0) {
+          toast.error(`Leg ${leg.id}: underlying trigger value must be above 0`);
+          return;
+        }
+        if (leg.reentry && leg.reentry.max_count <= 0) {
+          toast.error(`Leg ${leg.id}: re-entry count must be above 0`);
           return;
         }
       }

@@ -312,6 +312,11 @@ async def _recover_run(db: AsyncSession, run: SmStrategyRun) -> None:
         exch = leg.get("exchange")
         if sym and exch:
             open_leg_symbols.append((exch, sym))
+    if any(
+        leg.get("underlying_entry") or leg.get("underlying_risk")
+        for leg in state.get("legs", {}).values()
+    ):
+        open_leg_symbols.append((strategy.underlying_exchange, strategy.underlying))
     if open_leg_symbols:
         try:
             tick_feed.add_run_subscriptions(run.id, open_leg_symbols)

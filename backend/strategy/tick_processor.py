@@ -143,6 +143,8 @@ async def _process_tick_for_run(
         return
 
     triggered_exits: list[tuple[int, str]] = []
+    delayed_entries: list[int] = []
+    reentries: list[int] = []
     stop_reason: Optional[str] = None
 
     # Serialize state mutations against the engine's close-leg / exit paths.
@@ -157,6 +159,76 @@ async def _process_tick_for_run(
         if state is None:
             return
 
+        is_underlying_tick = (
+            exchange == strategy_row.underlying_exchange
+            and symbol == strategy_row.underlying
+        )
+
+        if is_underlying_tick:
+            state["underlying_ltp"] = ltp
+            state_changed = True
+            for lid, leg in (state.get("legs") or {}).items():
+                leg_id = int(lid)
+                if leg.get("status") == "configured":
+                    trigger = leg.get("underlying_entry")
+                    if trigger and _compare_trigger(
+                        ltp,
+                        trigger.get("operator"),
+                        float(trigger.get("value") or 0),
+                    ):
+                        leg["underlying_entry_fired_at"] = ltp
+                        leg["status"] = "pending_entry"
+                        delayed_entries.append(leg_id)
+                        state_changed = True
+                    continue
+                if leg.get("status") != "open":
+                    continue
+                risk_cfg = leg.get("underlying_risk") or {}
+                if not risk_cfg:
+                    continue
+                entry_underlying = leg.get("entry_underlying_ltp")
+                if entry_underlying is None:
+                    leg["entry_underlying_ltp"] = ltp
+                    state_changed = True
+                    continue
+                position = leg.get("position")
+                move = (
+                    ltp - float(entry_underlying)
+                    if position == "B"
+                    else float(entry_underlying) - ltp
+                )
+                sl_pts = risk_cfg.get("sl_pts")
+                target_pts = risk_cfg.get("target_pts")
+                if sl_pts and move <= -abs(float(sl_pts)):
+                    triggered_exits.append((leg_id, "exit_underlying_sl"))
+                    leg["last_exit_kind"] = "sl"
+                    state_changed = True
+                elif target_pts and move >= abs(float(target_pts)):
+                    triggered_exits.append((leg_id, "exit_underlying_target"))
+                    leg["last_exit_kind"] = "target"
+                    state_changed = True
+
+        waiting_reentries: list[int] = []
+        for lid, leg in (state.get("legs") or {}).items():
+            if leg.get("status") != "waiting_reentry":
+                continue
+            if leg.get("symbol") != symbol or leg.get("exchange") != exchange:
+                continue
+            entry_avg = leg.get("entry_avg")
+            exit_avg = leg.get("last_exit_price")
+            if entry_avg is None or exit_avg is None:
+                continue
+            entry_f = float(entry_avg)
+            exit_f = float(exit_avg)
+            if (
+                (exit_f > entry_f and ltp <= entry_f)
+                or (exit_f < entry_f and ltp >= entry_f)
+                or exit_f == entry_f
+            ):
+                leg["status"] = "pending_entry"
+                waiting_reentries.append(int(lid))
+                state_changed = True
+
         # Find every leg matching this symbol that's still open.
         matched_legs: list[tuple[str, dict]] = [
             (lid, leg) for lid, leg in state.get("legs", {}).items()
@@ -164,7 +236,7 @@ async def _process_tick_for_run(
             and leg.get("symbol") == symbol
             and leg.get("exchange") == exchange
         ]
-        if not matched_legs:
+        if not matched_legs and not is_underlying_tick and not waiting_reentries:
             return
 
         state_changed = False
@@ -207,9 +279,11 @@ async def _process_tick_for_run(
                 )
                 if outcome.triggered == "sl":
                     triggered_exits.append((int(lid), "exit_sl"))
+                    leg["last_exit_kind"] = "sl"
                     sl_leg_ids_this_tick.append(int(lid))
                 elif outcome.triggered == "target":
                     triggered_exits.append((int(lid), "exit_target"))
+                    leg["last_exit_kind"] = "target"
 
         # ---- Cross-cutting: Trail-SL-to-entry ----
         if (
@@ -281,6 +355,12 @@ async def _process_tick_for_run(
     # Runs outside the state lock so engine._exit_legs can re-acquire it.
     for leg_id, exit_kind in triggered_exits:
         await _trigger_exit(run_id, leg_id, exit_kind)
+        if exit_kind in {"exit_sl", "exit_target", "exit_underlying_sl", "exit_underlying_target"}:
+            if await _should_reenter(run_id, leg_id, exit_kind):
+                reentries.append(leg_id)
+
+    for leg_id in delayed_entries + reentries + waiting_reentries:
+        await _trigger_entry(run_id, leg_id)
 
     # If a strategy-level rule triggered, close every still-open leg via
     # engine.stop_run and finalize the run with the right stop_reason.
@@ -443,6 +523,99 @@ def _broadcast_delta(
     })
 
 
+def _compare_trigger(ltp: float, operator: Optional[str], value: float) -> bool:
+    if operator == "equal_to":
+        return ltp == value
+    if operator == "is_above":
+        return ltp > value
+    if operator == "is_below":
+        return ltp < value
+    if operator == "equal_or_above":
+        return ltp >= value
+    if operator == "equal_or_below":
+        return ltp <= value
+    return False
+
+
+def _exit_matches_reentry(exit_kind: str, on: str) -> bool:
+    hit = "target" if "target" in exit_kind else "sl" if "sl" in exit_kind else ""
+    return on == "sl_or_target" or on == hit
+
+
+async def _should_reenter(run_id: int, leg_id: int, exit_kind: str) -> bool:
+    state = await state_module.get_run_state(run_id)
+    leg = ((state or {}).get("legs") or {}).get(str(leg_id))
+    if not leg:
+        return False
+    cfg = leg.get("reentry") or {}
+    max_count = int(cfg.get("max_count") or 0)
+    if max_count <= 0:
+        return False
+    if not _exit_matches_reentry(exit_kind, cfg.get("on") or "sl_or_target"):
+        return False
+    if int(leg.get("reentry_count") or 0) >= max_count:
+        return False
+    async with state_module.get_state_lock(run_id):
+        state = await state_module.get_run_state(run_id)
+        if state is None:
+            return False
+        leg = (state.get("legs") or {}).get(str(leg_id))
+        if not leg or leg.get("status") != "closed":
+            return False
+        leg["reentry_count"] = int(leg.get("reentry_count") or 0) + 1
+        if (cfg.get("mode") or "reentry") == "reentry":
+            leg["status"] = "waiting_reentry"
+            should_open_now = False
+        else:
+            leg["status"] = "pending_entry"
+            should_open_now = True
+        await state_module.hydrate_run_state(run_id, state)
+    return should_open_now
+
+
+async def _trigger_entry(run_id: int, leg_id: int) -> None:
+    """Open/re-open a batch leg inside an active run."""
+    from backend.strategy import engine, live_auth
+    from backend.models.strategy_module import SmStrategy, SmStrategyRun
+
+    async with async_session() as db:
+        run = await db.get(SmStrategyRun, run_id)
+        if run is None or run.stopped_at is not None:
+            return
+        strategy = await db.get(SmStrategy, run.strategy_id)
+        if strategy is None:
+            return
+
+        auth_token: Optional[str] = None
+        broker = run.broker
+        config: Optional[dict] = None
+        if run.mode == "live":
+            ctx = await live_auth.resolve_live_auth(
+                db, user_id=strategy.user_id, broker=run.broker,
+            )
+            if ctx is None:
+                logger.warning(
+                    "Auto-entry refused for run %d leg %d: no active broker auth.",
+                    run_id, leg_id,
+                )
+                return
+            auth_token = ctx.auth_token
+            config = ctx.config
+        try:
+            await engine.enter_batch_leg_for_run(
+                db,
+                strategy=strategy,
+                run=run,
+                leg_id=leg_id,
+                mode=run.mode,
+                broker=broker,
+                auth_token=auth_token,
+                config=config,
+            )
+        except Exception:
+            logger.exception("Auto-entry failed for run %d leg %d", run_id, leg_id)
+
+
 async def _trigger_exit(run_id: int, leg_id: int, exit_kind: str) -> None:
     """Engine fires an exit when a leg's rule hits."""
     from backend.strategy import engine, live_auth
@@ -493,6 +666,15 @@ async def _trigger_exit(run_id: int, leg_id: int, exit_kind: str) -> None:
         # and the next /start refuses to fire. Batch-mode only — signal-
         # mode cycling is preserved inside _finalize_run_if_all_flat.
         try:
+            state = await state_module.get_run_state(run_id)
+            leg = ((state or {}).get("legs") or {}).get(str(leg_id))
+            cfg = (leg or {}).get("reentry") or {}
+            if (
+                exit_kind in {"exit_sl", "exit_target", "exit_underlying_sl", "exit_underlying_target"}
+                and int(cfg.get("max_count") or 0) > int((leg or {}).get("reentry_count") or 0)
+                and _exit_matches_reentry(exit_kind, cfg.get("on") or "sl_or_target")
+            ):
+                return
             await engine._finalize_run_if_all_flat(  # noqa: SLF001
                 db, strategy=strategy, run=run,
             )

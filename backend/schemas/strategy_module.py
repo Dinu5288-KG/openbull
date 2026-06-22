@@ -28,6 +28,34 @@ class TrailConfig(BaseModel):
     y: float = Field(0, ge=0, description="Trail step (pts) once armed")
 
 
+class UnderlyingTriggerConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operator: Literal[
+        "equal_to",
+        "is_above",
+        "is_below",
+        "equal_or_above",
+        "equal_or_below",
+    ]
+    value: float = Field(..., gt=0)
+
+
+class UnderlyingRiskConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sl_pts: Optional[float] = Field(None, ge=0)
+    target_pts: Optional[float] = Field(None, ge=0)
+
+
+class ReEntryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["reentry", "recost", "reexecute"] = "reentry"
+    max_count: int = Field(0, ge=0, le=20)
+    on: Literal["sl", "target", "sl_or_target"] = "sl_or_target"
+
+
 class Leg(BaseModel):
     """One leg in a strategy.
 
@@ -89,6 +117,9 @@ class Leg(BaseModel):
     target_pts: Optional[float] = Field(None, ge=0)
     sl_pts: Optional[float] = Field(None, ge=0)
     trail: TrailConfig = Field(default_factory=TrailConfig)
+    underlying_entry: Optional[UnderlyingTriggerConfig] = None
+    underlying_risk: Optional[UnderlyingRiskConfig] = None
+    reentry: Optional[ReEntryConfig] = None
 
     momentum: Optional[dict] = Field(default=None, description="v1 stub — not evaluated")
 

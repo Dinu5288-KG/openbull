@@ -80,6 +80,29 @@ export interface TrailConfig {
   y: number;
 }
 
+export type TriggerOperator =
+  | "equal_to"
+  | "is_above"
+  | "is_below"
+  | "equal_or_above"
+  | "equal_or_below";
+
+export interface UnderlyingTriggerConfig {
+  operator: TriggerOperator;
+  value: number;
+}
+
+export interface UnderlyingRiskConfig {
+  sl_pts?: number | null;
+  target_pts?: number | null;
+}
+
+export interface ReEntryConfig {
+  mode: "reentry" | "recost" | "reexecute";
+  max_count: number;
+  on: "sl" | "target" | "sl_or_target";
+}
+
 export interface Leg {
   id: number;
   segment: Segment;
@@ -109,6 +132,9 @@ export interface Leg {
   target_pts?: number | null;
   sl_pts?: number | null;
   trail: TrailConfig;
+  underlying_entry?: UnderlyingTriggerConfig | null;
+  underlying_risk?: UnderlyingRiskConfig | null;
+  reentry?: ReEntryConfig | null;
   momentum?: Record<string, unknown> | null;
 }
 

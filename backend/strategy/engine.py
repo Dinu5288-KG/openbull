@@ -185,6 +185,87 @@ def _exit_action(position: str) -> str:
     return "SELL" if position == "B" else "BUY"
 
 
+async def _place_resolved_entry(
+    db: AsyncSession,
+    *,
+    strategy: SmStrategy,
+    run: SmStrategyRun,
+    resolved_leg: dict[str, Any],
+    mode: str,
+    broker: str,
+    auth_token: Optional[str],
+    config: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """Place one already-resolved batch-mode leg entry order."""
+    action = _entry_action(resolved_leg["position"])
+    qty = int(resolved_leg["lots"]) * int(resolved_leg["lotsize"])
+    order_data = {
+        "symbol": resolved_leg["symbol"],
+        "exchange": resolved_leg["exchange"],
+        "action": action,
+        "quantity": str(qty),
+        "pricetype": strategy.pricetype or "MARKET",
+        "product": strategy.product or "NRML",
+        "price": "0",
+        "trigger_price": "0",
+        "strategy": strategy.name,
+    }
+    ok, response, _status = dispatch_order(
+        mode=mode,
+        user_id=strategy.user_id,
+        order_data=order_data,
+        auth_token=auth_token,
+        broker=broker,
+        config=config,
+    )
+    broker_order_id = response.get("orderid") if isinstance(response, dict) else None
+
+    order_row = await repo.record_order(
+        db,
+        run_id=run.id,
+        leg_id=resolved_leg["leg_id"],
+        kind="entry",
+        symbol=resolved_leg["symbol"],
+        exchange=resolved_leg["exchange"],
+        action=action,
+        qty=qty,
+        pricetype=strategy.pricetype or "MARKET",
+        broker_order_id=broker_order_id,
+        status="open" if ok else "rejected",
+        reject_reason=None if ok else (
+            response.get("message", "rejected")
+            if isinstance(response, dict) else "rejected"
+        ),
+    )
+    if ok:
+        try:
+            await reconcile_order_fill(
+                db, order_row=order_row, mode=mode,
+                user_id=strategy.user_id,
+                broker=broker, auth_token=auth_token,
+            )
+        except Exception:
+            logger.exception("Fill recon failed for entry order %s", order_row.id)
+    repo.emit_leg_entry_placed(
+        user_id=strategy.user_id,
+        strategy_id=strategy.id,
+        run_id=run.id,
+        leg_id=resolved_leg["leg_id"],
+        symbol=resolved_leg["symbol"],
+        action=action,
+        qty=qty,
+        broker_order_id=broker_order_id,
+    )
+    return {
+        **resolved_leg,
+        "qty": qty,
+        "order_id": order_row.id,
+        "broker_order_id": broker_order_id,
+        "status": order_row.status,
+        "reject_reason": order_row.reject_reason,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle: start
 # ---------------------------------------------------------------------------
@@ -279,6 +360,9 @@ async def start_run(
             "tick_size": r["tick_size"],
             "strike": r.get("strike"),
             "expiry": r.get("expiry"),
+            "underlying_entry": leg.get("underlying_entry"),
+            "underlying_risk": leg.get("underlying_risk"),
+            "reentry": leg.get("reentry"),
         })
 
     # Open a run row first — so any failure mid-placement is logged against
@@ -290,92 +374,47 @@ async def start_run(
     # Place entry orders BUY-before-SELL — same convention as
     # options_multiorder_service. Avoids margin spikes on credit spreads
     # where the long leg should fund the short leg's margin.
-    buy_legs = [r for r in resolved_legs if r["position"] == "B"]
-    sell_legs = [r for r in resolved_legs if r["position"] == "S"]
+    immediate_legs = [r for r in resolved_legs if not r.get("underlying_entry")]
+    delayed_legs = [r for r in resolved_legs if r.get("underlying_entry")]
+    buy_legs = [r for r in immediate_legs if r["position"] == "B"]
+    sell_legs = [r for r in immediate_legs if r["position"] == "S"]
 
     leg_summaries: list[dict[str, Any]] = []
     placement_errors: list[str] = []
 
     for r in buy_legs + sell_legs:
-        action = _entry_action(r["position"])
-        qty = int(r["lots"]) * int(r["lotsize"])
-        order_data = {
-            "symbol": r["symbol"],
-            "exchange": r["exchange"],
-            "action": action,
-            "quantity": str(qty),
-            "pricetype": strategy.pricetype or "MARKET",
-            "product": strategy.product or "NRML",
-            "price": "0",
-            "trigger_price": "0",
-            "strategy": strategy.name,
-        }
-        ok, response, _status = dispatch_order(
+        leg_summary = await _place_resolved_entry(
+            db,
+            strategy=strategy,
+            run=run,
+            resolved_leg=r,
             mode=mode,
-            user_id=strategy.user_id,
-            order_data=order_data,
-            auth_token=auth_token,
             broker=broker,
+            auth_token=auth_token,
             config=config,
         )
-        broker_order_id = response.get("orderid") if isinstance(response, dict) else None
-
-        order_row = await repo.record_order(
-            db,
-            run_id=run.id,
-            leg_id=r["leg_id"],
-            kind="entry",
-            symbol=r["symbol"],
-            exchange=r["exchange"],
-            action=action,
-            qty=qty,
-            pricetype=strategy.pricetype or "MARKET",
-            broker_order_id=broker_order_id,
-            status="open" if ok else "rejected",
-            reject_reason=None if ok else response.get("message", "rejected"),
-        )
-        # Reconcile against sandbox/broker immediately so the order's
-        # actual fill price + status are on the row before the engine
-        # emits the audit event. Without this the orderbook UI sticks
-        # at 'open' and Live P&L has nothing to compute against.
-        if ok:
-            try:
-                await reconcile_order_fill(
-                    db, order_row=order_row, mode=mode,
-                    user_id=strategy.user_id,
-                    broker=broker, auth_token=auth_token,
-                )
-            except Exception:
-                logger.exception(
-                    "Fill recon failed for entry order %s", order_row.id,
-                )
-        repo.emit_leg_entry_placed(
-            user_id=strategy.user_id,
-            strategy_id=strategy.id,
-            run_id=run.id,
-            leg_id=r["leg_id"],
-            symbol=r["symbol"],
-            action=action,
-            qty=qty,
-            broker_order_id=broker_order_id,
-        )
+        leg_summaries.append(leg_summary)
+        if leg_summary["status"] == "rejected":
+            placement_errors.append(
+                f"leg {r['leg_id']} ({r['symbol']}): {leg_summary.get('reject_reason') or 'rejected'}"
+            )
+    for r in delayed_legs:
         leg_summaries.append({
             **r,
-            "qty": qty,
-            "order_id": order_row.id,
-            "broker_order_id": broker_order_id,
-            "status": order_row.status,
-            "reject_reason": order_row.reject_reason,
+            "qty": int(r["lots"]) * int(r["lotsize"]),
+            "order_id": None,
+            "broker_order_id": None,
+            "status": "configured",
+            "reject_reason": None,
         })
-        if not ok:
-            placement_errors.append(
-                f"leg {r['leg_id']} ({r['symbol']}): {response.get('message', 'rejected')}"
-            )
 
     # If every leg failed to place, the run is wedged — finalize as 'error'.
     # If only some failed, leave the run running so the user can square off
     # what did fill from the UI; log the partial failure prominently.
-    all_failed = all(s["status"] == "rejected" for s in leg_summaries)
+    all_failed = bool(immediate_legs) and not delayed_legs and all(
+        s["status"] == "rejected" for s in leg_summaries
+        if not s.get("underlying_entry")
+    )
     if all_failed:
         await repo.finalize_run(
             db, run=run, strategy=strategy, stop_reason="error",
@@ -433,6 +472,8 @@ async def start_run(
             if ls.get("status") != "rejected"
             and ls.get("symbol") and ls.get("exchange")
         })
+        if any(ls.get("underlying_entry") or ls.get("underlying_risk") for ls in leg_summaries):
+            symbols.append((strategy.underlying_exchange, strategy.underlying))
         tick_feed.add_run_subscriptions(run.id, symbols)
     except Exception:
         logger.exception("Failed to subscribe ticks for run %d", run.id)
@@ -751,6 +792,118 @@ async def _finalize_run_if_all_flat(
     except Exception:
         logger.exception("Failed to unsubscribe ticks for run %d", run.id)
     return True
+
+
+async def enter_batch_leg_for_run(
+    db: AsyncSession,
+    *,
+    strategy: SmStrategy,
+    run: SmStrategyRun,
+    leg_id: int,
+    mode: str,
+    broker: str,
+    auth_token: Optional[str],
+    config: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    """Open one batch-mode leg inside an existing run.
+
+    Used by underlying wait-and-trade and re-entry/re-execute rules. The
+    regular start path opens immediate legs; this function opens a configured
+    or previously closed leg without finalizing/restarting the run.
+    """
+    leg_config = next(
+        (leg for leg in (strategy.legs or []) if int(leg.get("id") or 0) == leg_id),
+        None,
+    )
+    if leg_config is None:
+        raise EngineError(f"Leg {leg_id}: config not found")
+    resolved = _resolve_leg(
+        leg_config,
+        underlying=strategy.underlying,
+        underlying_exchange=strategy.underlying_exchange,
+        auth_token=auth_token,
+        broker=broker,
+        config=config,
+        expiry_dates_cache={},
+    )
+    resolved_leg = {
+        "leg_id": leg_config["id"],
+        "position": leg_config["position"],
+        "lots": leg_config["lots"],
+        "symbol": resolved["symbol"],
+        "exchange": resolved["exchange"],
+        "lotsize": resolved["lotsize"],
+        "tick_size": resolved["tick_size"],
+        "strike": resolved.get("strike"),
+        "expiry": resolved.get("expiry"),
+        "underlying_entry": leg_config.get("underlying_entry"),
+        "underlying_risk": leg_config.get("underlying_risk"),
+        "reentry": leg_config.get("reentry"),
+    }
+    summary = await _place_resolved_entry(
+        db,
+        strategy=strategy,
+        run=run,
+        resolved_leg=resolved_leg,
+        mode=mode,
+        broker=broker,
+        auth_token=auth_token,
+        config=config,
+    )
+    if summary.get("status") == "rejected":
+        return summary
+
+    order_row = await db.get(SmStrategyOrder, summary["order_id"])
+    async with state_module.get_state_lock(run.id):
+        state = await state_module.get_run_state(run.id)
+        if state is not None:
+            leg_state = (state.setdefault("legs", {})).setdefault(str(leg_id), {})
+            leg_state.update({
+                "leg_id": leg_id,
+                "position": leg_config.get("position"),
+                "lots": leg_config.get("lots"),
+                "symbol": summary.get("symbol"),
+                "exchange": summary.get("exchange"),
+                "qty": summary.get("qty"),
+                "entry_order_id": summary.get("order_id"),
+                "entry_status": summary.get("status"),
+                "entry_avg": (
+                    float(order_row.avg_fill_price)
+                    if order_row is not None and order_row.avg_fill_price is not None
+                    else leg_state.get("entry_avg")
+                ),
+                "ltp": None,
+                "mtm": 0.0,
+                "status": "open",
+                "exit_order_id": None,
+                "exit_kind": None,
+                "effective_sl": None,
+                "effective_target": None,
+                "underlying_entry": leg_config.get("underlying_entry"),
+                "underlying_risk": leg_config.get("underlying_risk"),
+                "reentry": leg_config.get("reentry"),
+                "trail_active": False,
+                "favorable_peak": 0.0,
+            })
+            await state_module.hydrate_run_state(run.id, state)
+
+    if order_row is not None and order_row.avg_fill_price is not None:
+        await _apply_fill_to_state(
+            run.id,
+            leg_id=leg_id,
+            order_kind="entry",
+            avg_fill_price=float(order_row.avg_fill_price),
+            filled_qty=int(order_row.filled_qty or order_row.qty),
+            strategy_legs=strategy.legs or [],
+        )
+    try:
+        tick_feed.add_run_subscriptions(
+            run.id,
+            [(summary["exchange"], summary["symbol"])],
+        )
+    except Exception:
+        logger.exception("enter_batch_leg_for_run: failed to subscribe ticks")
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -1975,6 +2128,12 @@ async def _apply_fill_to_state(
         leg["entry_avg"] = avg_fill_price
         leg["qty"] = filled_qty
         leg["status"] = "open"
+        leg["entry_underlying_ltp"] = state.get("underlying_ltp")
+        leg["entry_count"] = int(leg.get("entry_count") or 0) + 1
+        leg["effective_sl"] = None
+        leg["effective_target"] = None
+        leg["trail_active"] = False
+        leg["favorable_peak"] = 0.0
         # For signal-mode legs the current_side has already been set by
         # enter_leg before the dispatch; for batch-mode legs we look at
         # the per-leg config's 'position' (B/S) to derive the side.
@@ -1999,6 +2158,7 @@ async def _apply_fill_to_state(
         leg["status"] = "closed"
         leg["current_side"] = None
         leg["mtm"] = 0.0  # closed legs contribute 0 to unrealized
+        leg["last_exit_price"] = avg_fill_price
 
     # Recompute strategy-level aggregates.
     realized_total = 0.0
