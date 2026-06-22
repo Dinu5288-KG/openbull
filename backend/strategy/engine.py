@@ -199,6 +199,30 @@ def _resolve_leg(
             raise EngineError(f"Leg {leg.get('id')}: {data.get('message', 'ATM percent resolution failed')}")
         return data
 
+    if strike_mode == "straddle_width":
+        straddle_width_value = leg.get("straddle_width_value")
+        if straddle_width_value is None:
+            raise EngineError(
+                f"Leg {leg.get('id')}: straddle_width_value required when strike_mode=straddle_width"
+            )
+        if not auth_token or not broker:
+            raise EngineError(
+                f"Leg {leg.get('id')}: straddle-width resolution needs broker auth."
+            )
+        ok, data, _ = symbol_resolver.resolve_straddle_width(
+            underlying=underlying,
+            underlying_exchange=underlying_exchange,
+            expiry_date=resolved,
+            width=float(straddle_width_value),
+            option_type=option_type,
+            auth_token=auth_token,
+            broker=broker,
+            config=config,
+        )
+        if not ok:
+            raise EngineError(f"Leg {leg.get('id')}: {data.get('message', 'straddle-width resolution failed')}")
+        return data
+
     if strike_mode == "strike":
         strike_value = leg.get("strike_value")
         if strike_value is None:
